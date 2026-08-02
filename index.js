@@ -7,8 +7,7 @@ app.listen(port, () => console.log(`Web server listening on port ${port}`));
 
 require('dotenv').config();
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const fs = require('fs'); // 👈 New requirement to read/write files
-
+const fs = require('fs');
 
 const client = new Client({ 
     intents: [
@@ -39,7 +38,7 @@ client.once('ready', async () => {
         ]
     };
 
-    // 2. The New Vote Command
+    // 2. The Vote Command
     const voteCommand = {
         name: 'voteprice',
         description: 'Propose a new base buy and sell price to the server (30 min vote)',
@@ -53,7 +52,7 @@ client.once('ready', async () => {
             {
                 name: 'new_buy',
                 description: 'The proposed base BUY price',
-                type: 4, // Type 4 is an Integer (whole number)
+                type: 4, 
                 required: true,
             },
             {
@@ -65,9 +64,35 @@ client.once('ready', async () => {
         ]
     };
 
-    // Register both commands
-    await client.application.commands.set([priceCommand, voteCommand]);
-    console.log('✅ Slash commands /price and /voteprice successfully registered!');
+    // 3. The Admin Force-Change Command
+    const priceChangeCommand = {
+        name: 'pricechange',
+        description: 'Forcefully change the price of an item without a vote (Admin only)',
+        options: [
+            {
+                name: 'item',
+                description: 'The item name to update',
+                type: 3,
+                required: true,
+            },
+            {
+                name: 'new_buy',
+                description: 'The new base BUY price',
+                type: 4,
+                required: true,
+            },
+            {
+                name: 'new_sell',
+                description: 'The new base SELL price',
+                type: 4,
+                required: true,
+            }
+        ]
+    };
+
+    // Register all commands with Discord
+    await client.application.commands.set([priceCommand, voteCommand, priceChangeCommand]);
+    console.log('✅ Slash commands /price, /voteprice, and /pricechange successfully registered!');
 });
 
 client.on('interactionCreate', async interaction => {
@@ -96,19 +121,40 @@ client.on('interactionCreate', async interaction => {
         }
     }
 
+    // --- /PRICECHANGE COMMAND LOGIC (ADMIN OVERRIDE) ---
+    if (interaction.commandName === 'pricechange') {
+        // 👇 PASTE YOUR AUTHORIZED ROLE ID HERE INSIDE THE QUOTES 👇
+        const requiredRoleId = '1533611128284909608'; 
+
+        if (!interaction.member.roles.cache.has(requiredRoleId)) {
+            return interaction.reply({ 
+                content: '❌ You do not have permission to force-change prices.', 
+                ephemeral: true 
+            });
+        }
+
+        const item = interaction.options.getString('item').toLowerCase().trim();
+        const newBuy = interaction.options.getInteger('new_buy');
+        const newSell = interaction.options.getInteger('new_sell');
+
+        // Update memory and save permanently to file
+        priceIndex[item] = { buy: newBuy, sell: newSell };
+        fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
+
+        return interaction.reply({ 
+            content: `👑 **Admin Override:** The official base prices for **${item.toUpperCase()}** have been instantly updated to Buy: **${newBuy}** | Sell: **${newSell}**.` 
+        });
+    }
+
     // --- /VOTEPRICE COMMAND LOGIC ---
     if (interaction.commandName === 'voteprice') {
         const item = interaction.options.getString('item').toLowerCase().trim();
         const newBuy = interaction.options.getInteger('new_buy');
         const newSell = interaction.options.getInteger('new_sell');
 
-        // Calculate required votes (50% of the server)
-        // Temporarily hardcoded to 1 for testing purposes
-// Calculate required votes (50% of the server)
-const totalMembers = interaction.guild.memberCount;
-const requiredVotes = Math.ceil(totalMembers / 2);
+        const totalMembers = interaction.guild.memberCount;
+        const requiredVotes = Math.ceil(totalMembers / 2);
 
-        // Build the physical vote button
         const voteButton = new ButtonBuilder()
             .setCustomId('vote_yes')
             .setLabel('Vote YES')
@@ -116,7 +162,6 @@ const requiredVotes = Math.ceil(totalMembers / 2);
 
         const row = new ActionRowBuilder().addComponents(voteButton);
 
-        // Send the initial proposal message
         const responseMessage = await interaction.reply({
             content: `📢 **PRICE CHANGE PROPOSAL** 📢\n` +
                      `**Item:** ${item.toUpperCase()}\n` +
@@ -124,29 +169,21 @@ const requiredVotes = Math.ceil(totalMembers / 2);
                      `*Requires **${requiredVotes}** votes (50% of server) to pass.*\n` +
                      `⏳ *Time remaining: 30 minutes.*`,
             components: [row],
-            fetchReply: true // Allows us to attach the collector to this specific message
+            fetchReply: true 
         });
 
-        // Set up the tracker
         const votedUsers = new Set();
-        
-        // Create a 30-minute timer (30 minutes * 60 seconds * 1000 milliseconds)
         const collector = responseMessage.createMessageComponentCollector({ time: 30 * 60 * 1000 });
 
         collector.on('collect', async buttonInteraction => {
-            // Check if they only clicked our YES button
             if (buttonInteraction.customId === 'vote_yes') {
-                
-                // Prevent double voting
                 if (votedUsers.has(buttonInteraction.user.id)) {
                     return buttonInteraction.reply({ content: 'You have already voted on this proposal!', ephemeral: true });
                 }
 
-                // Add their ID to the set and confirm their vote
                 votedUsers.add(buttonInteraction.user.id);
                 await buttonInteraction.reply({ content: 'Your vote has been counted!', ephemeral: true });
 
-                // Update the main message to show live vote counts
                 await interaction.editReply({
                     content: `📢 **PRICE CHANGE PROPOSAL** 📢\n` +
                              `**Item:** ${item.toUpperCase()}\n` +
@@ -156,27 +193,19 @@ const requiredVotes = Math.ceil(totalMembers / 2);
                              `⏳ *Time remaining: 30 minutes.*`
                 });
 
-                // Check if the threshold is met
-                // Check if the threshold is met
-if (votedUsers.size >= requiredVotes) {
-    // Update the live memory
-    priceIndex[item] = { buy: newBuy, sell: newSell };
-    
-    // 💾 NEW: Save the updated memory directly to the JSON file permanently
-    fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
-    
-    // Announce the success and kill the timer
-    await interaction.followUp(`🎉 **VOTE PASSED!** The official Crown Empire base prices for **${item.toUpperCase()}** are now Buy: ${newBuy} | Sell: ${newSell}.`);
-    collector.stop('passed');
-}
+                if (votedUsers.size >= requiredVotes) {
+                    priceIndex[item] = { buy: newBuy, sell: newSell };
+                    fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
+                    
+                    await interaction.followUp(`🎉 **VOTE PASSED!** The official Crown Empire base prices for **${item.toUpperCase()}** are now Buy: ${newBuy} | Sell: ${newSell}.`);
+                    collector.stop('passed');
+                }
             }
         });
 
         collector.on('end', async (collected, reason) => {
-            // Remove the button from the message when the timer ends
             await interaction.editReply({ components: [] });
 
-            // If it ended because time ran out (not because it passed)
             if (reason !== 'passed') {
                 await interaction.followUp(`❌ **VOTE FAILED!** The proposal for **${item.toUpperCase()}** only received ${votedUsers.size}/${requiredVotes} votes before time ran out.`);
             }
@@ -184,5 +213,4 @@ if (votedUsers.size >= requiredVotes) {
     }
 });
 
-// Log in with your secret token
 client.login(process.env.TOKEN);
