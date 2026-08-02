@@ -1,0 +1,18 @@
+{
+    "copper": {
+        "buy": 1000,
+        "sell": 800
+    },
+    "red flower": {
+        "buy": 500,
+        "sell": 400
+    },
+    "blue flower": {
+        "buy": 750,
+        "sell": 600
+    },
+    "iron": {
+        "buy": 10000,
+        "sell": 2000
+    }
+}
