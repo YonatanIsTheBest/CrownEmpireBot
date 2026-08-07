@@ -121,8 +121,17 @@ client.once('ready', async () => {
         ]
     };
 
-    await client.application.commands.set([priceCommand, voteCommand, priceChangeCommand, addItemCommand, renameItemCommand]);
-    console.log('✅ All 5 Slash commands successfully registered!');
+    // 🆕 Command to delete an item entirely
+    const removeItemCommand = {
+        name: 'removeitem',
+        description: 'Remove an item completely from the database (Admin only)',
+        options: [
+            { name: 'item', description: 'The item to remove', type: 3, required: true, autocomplete: true }
+        ]
+    };
+
+    await client.application.commands.set([priceCommand, voteCommand, priceChangeCommand, addItemCommand, renameItemCommand, removeItemCommand]);
+    console.log('✅ All 6 Slash commands successfully registered!');
 });
 
 client.on('interactionCreate', async interaction => {
@@ -134,8 +143,8 @@ client.on('interactionCreate', async interaction => {
         const filtered = choices.filter(choice => choice.includes(focusedValue));
         
         const respondChoices = filtered.slice(0, 25).map(choice => ({
-            name: toTitleCase(choice), // Shows beautifully formatted names to the user
-            value: choice,             // Sends the safe lowercase key to the database
+            name: toTitleCase(choice), 
+            value: choice,             
         }));
 
         await interaction.respond(respondChoices);
@@ -275,6 +284,30 @@ client.on('interactionCreate', async interaction => {
             .setDescription(`Successfully changed **${toTitleCase(oldName)}** ➔ **${toTitleCase(newName)}**`);
 
         return interaction.reply({ embeds: [renameEmbed] });
+    }
+
+    // --- /REMOVEITEM COMMAND ---
+    if (interaction.commandName === 'removeitem') {
+        if (!isAdmin) {
+            return interaction.reply({ content: '❌ You do not have permission to remove items.', ephemeral: true });
+        }
+
+        const item = interaction.options.getString('item').toLowerCase().trim();
+
+        if (!priceIndex[item]) {
+            return interaction.reply({ content: `❌ **${toTitleCase(item)}** was not found in the database.`, ephemeral: true });
+        }
+
+        // Delete the item from the object and save
+        delete priceIndex[item];
+        fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
+
+        const removeEmbed = new EmbedBuilder()
+            .setColor('#E74C3C') // Red styling for deletion
+            .setTitle('🗑️ Item Removed')
+            .setDescription(`Successfully deleted **${toTitleCase(item)}** from the database.`);
+
+        return interaction.reply({ embeds: [removeEmbed] });
     }
 
     // --- /VOTEPRICE COMMAND ---
