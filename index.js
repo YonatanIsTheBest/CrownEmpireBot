@@ -6,10 +6,10 @@ app.get('/', (req, res) => res.send('Bot is alive!'));
 app.listen(port, () => console.log(`Web server listening on port ${port}`));
 
 require('dotenv').config();
-const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
 const fs = require('fs');
 
-// 👇 PASTE YOUR AUTHORIZED ADMIN ROLE ID HERE ONCE 👇
+// 👇 PASTE YOUR AUTHORIZED ADMIN ROLE ID HERE 👇
 const ADMIN_ROLE_ID = '1533611128284909608'; 
 
 const client = new Client({ 
@@ -24,7 +24,7 @@ const client = new Client({
 // 👑 Dynamically load the Crown Empire Price Index
 let priceIndex = JSON.parse(fs.readFileSync('./prices.json', 'utf8'));
 
-// 🔢 Formatter function updated to handle Billions (B) and Trillions (T)
+// 🔢 Formatter function for T, B, M, k
 function formatPrice(num) {
     if (num === 0) return "0";
     if (num >= 1000000000000) {
@@ -44,7 +44,7 @@ client.once('ready', async () => {
 
     const priceCommand = {
         name: 'price',
-        description: 'Check the Crown Empire 10% price index for an item',
+        description: 'Check official Crown Empire shop prices for an item',
         options: [{ name: 'item', description: 'The item you want to check', type: 3, required: true, autocomplete: true }]
     };
 
@@ -68,7 +68,6 @@ client.once('ready', async () => {
         ]
     };
 
-    // 🆕 Command to add a brand new item to the database
     const addItemCommand = {
         name: 'additem',
         description: 'Insert a brand new item into the database (Admin only)',
@@ -79,7 +78,6 @@ client.once('ready', async () => {
         ]
     };
 
-    // 🆕 Command to rename an existing item
     const renameItemCommand = {
         name: 'renameitem',
         description: 'Change the name of an existing item in the database (Admin only)',
@@ -95,7 +93,7 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
     
-    // 🧠 --- AUTOCOMPLETE LOGIC ---
+    // 🧠 AUTOCOMPLETE LOGIC
     if (interaction.isAutocomplete()) {
         const focusedValue = interaction.options.getFocused().toLowerCase();
         const choices = Object.keys(priceIndex);
@@ -112,26 +110,31 @@ client.on('interactionCreate', async interaction => {
 
     if (!interaction.isChatInputCommand()) return;
 
-    // --- /PRICE COMMAND ---
+    // --- /PRICE COMMAND (MODERN EMBED UI) ---
     if (interaction.commandName === 'price') {
         const item = interaction.options.getString('item').toLowerCase().trim();
 
         if (priceIndex[item]) {
             const ownerSellPrice = priceIndex[item].buy; 
             const ownerBuyPrice = priceIndex[item].sell;
-            
-            const minSell = Math.floor(ownerSellPrice * 0.90);
-            const maxSell = Math.ceil(ownerSellPrice * 1.10);
-            const minBuy = Math.floor(ownerBuyPrice * 0.90);
-            const maxBuy = Math.ceil(ownerBuyPrice * 1.10);
 
-            await interaction.reply(
-                `**${item.toUpperCase()}**\n` +
-                `**🟢 SELLING (You sell to players)**\n> Base Price: **${formatPrice(ownerSellPrice)}**\n> 10% Range: **${formatPrice(minSell)}** - **${formatPrice(maxSell)}**\n\n` +
-                `**🔴 BUYING (You buy from players)**\n> Base Price: **${formatPrice(ownerBuyPrice)}**\n> 10% Range: **${formatPrice(minBuy)}** - **${formatPrice(maxBuy)}**`
-            );
+            const priceEmbed = new EmbedBuilder()
+                .setColor('#8A2BE2') // Modern Royal Purple Accent Bar
+                .setTitle('Price Results')
+                .setDescription(
+                    `### ${item.toUpperCase()}\n\n` +
+                    `🟢 **Selling price:** **${formatPrice(ownerSellPrice)}**\n` +
+                    `🔴 **Buying price:** **${formatPrice(ownerBuyPrice)}**`
+                )
+                .setFooter({ text: 'Crown Empire Economy' });
+
+            await interaction.reply({ embeds: [priceEmbed] });
         } else {
-            await interaction.reply(`The Crown Empire has not set official prices for "${item}" yet.`);
+            const notFoundEmbed = new EmbedBuilder()
+                .setColor('#FF4D4D')
+                .setDescription(`❌ The Crown Empire has not set official prices for **"${item}"** yet.`);
+            
+            await interaction.reply({ embeds: [notFoundEmbed], ephemeral: true });
         }
     }
 
@@ -152,7 +155,17 @@ client.on('interactionCreate', async interaction => {
         priceIndex[item] = { buy: newSell, sell: newBuy };
         fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
 
-        return interaction.reply({ content: `👑 **Admin Override:** **${item.toUpperCase()}** updated to **Selling:** ${formatPrice(newSell)} | **Buying:** ${formatPrice(newBuy)}.` });
+        const adminEmbed = new EmbedBuilder()
+            .setColor('#FFD700') // Gold Accent
+            .setTitle('👑 Admin Price Override')
+            .setDescription(
+                `### ${item.toUpperCase()}\n\n` +
+                `🟢 **New Selling price:** **${formatPrice(newSell)}**\n` +
+                `🔴 **New Buying price:** **${formatPrice(newBuy)}**`
+            )
+            .setFooter({ text: 'Crown Empire Admin Panel' });
+
+        return interaction.reply({ embeds: [adminEmbed] });
     }
 
     // --- /ADDITEM COMMAND ---
@@ -166,13 +179,22 @@ client.on('interactionCreate', async interaction => {
         const newBuy = interaction.options.getInteger('buy_price');
 
         if (priceIndex[item]) {
-            return interaction.reply({ content: `❌ **${item.toUpperCase()}** already exists in the database! Use \`/pricechange\` to update it.`, ephemeral: true });
+            return interaction.reply({ content: `❌ **${item.toUpperCase()}** already exists! Use \`/pricechange\` to update it.`, ephemeral: true });
         }
 
         priceIndex[item] = { buy: newSell, sell: newBuy };
         fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
 
-        return interaction.reply({ content: `✅ **Added New Item:** **${item.toUpperCase()}** was added to the database at **Selling:** ${formatPrice(newSell)} | **Buying:** ${formatPrice(newBuy)}.` });
+        const addEmbed = new EmbedBuilder()
+            .setColor('#00FF7F')
+            .setTitle('✅ Item Added')
+            .setDescription(
+                `### ${item.toUpperCase()}\n\n` +
+                `🟢 **Selling price:** **${formatPrice(newSell)}**\n` +
+                `🔴 **Buying price:** **${formatPrice(newBuy)}**`
+            );
+
+        return interaction.reply({ embeds: [addEmbed] });
     }
 
     // --- /RENAMEITEM COMMAND ---
@@ -191,15 +213,19 @@ client.on('interactionCreate', async interaction => {
             return interaction.reply({ content: `❌ **${newName.toUpperCase()}** already exists! Choose a different name.`, ephemeral: true });
         }
 
-        // Copy the old data to the new name, then delete the old name
         priceIndex[newName] = priceIndex[oldName];
         delete priceIndex[oldName];
         fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
 
-        return interaction.reply({ content: `🔄 **Renamed Item:** **${oldName.toUpperCase()}** has been successfully renamed to **${newName.toUpperCase()}**.` });
+        const renameEmbed = new EmbedBuilder()
+            .setColor('#3498DB')
+            .setTitle('🔄 Item Renamed')
+            .setDescription(`Successfully changed **${oldName.toUpperCase()}** ➔ **${newName.toUpperCase()}**`);
+
+        return interaction.reply({ embeds: [renameEmbed] });
     }
 
-    // --- /VOTEPRICE COMMAND ---
+    // --- /VOTEPRICE COMMAND (EMBED VOTING UI) ---
     if (interaction.commandName === 'voteprice') {
         const item = interaction.options.getString('item').toLowerCase().trim();
         const newSell = interaction.options.getInteger('sell_price');
@@ -207,6 +233,18 @@ client.on('interactionCreate', async interaction => {
 
         const totalMembers = interaction.guild.memberCount;
         const requiredVotes = Math.ceil(totalMembers / 2);
+
+        const voteEmbed = new EmbedBuilder()
+            .setColor('#5865F2') // Discord Blurple
+            .setTitle('📢 Price Change Proposal')
+            .setDescription(
+                `### ${item.toUpperCase()}\n\n` +
+                `🟢 **Proposed Selling:** **${formatPrice(newSell)}**\n` +
+                `🔴 **Proposed Buying:** **${formatPrice(newBuy)}**\n\n` +
+                `📊 **Votes:** \`0 / ${requiredVotes}\` (Requires 50% of server)\n` +
+                `⏳ *Voting ends in 30 minutes.*`
+            )
+            .setFooter({ text: 'Crown Empire Community Governance' });
 
         const voteButton = new ButtonBuilder()
             .setCustomId('vote_yes')
@@ -216,11 +254,7 @@ client.on('interactionCreate', async interaction => {
         const row = new ActionRowBuilder().addComponents(voteButton);
 
         const responseMessage = await interaction.reply({
-            content: `📢 **PRICE CHANGE PROPOSAL** 📢\n` +
-                     `**Item:** ${item.toUpperCase()}\n` +
-                     `**Proposed Selling Price:** ${formatPrice(newSell)} | **Proposed Buying Price:** ${formatPrice(newBuy)}\n\n` +
-                     `*Requires **${requiredVotes}** votes (50% of server) to pass.*\n` +
-                     `⏳ *Time remaining: 30 minutes.*`,
+            embeds: [voteEmbed],
             components: [row],
             fetchReply: true 
         });
@@ -237,20 +271,34 @@ client.on('interactionCreate', async interaction => {
                 votedUsers.add(buttonInteraction.user.id);
                 await buttonInteraction.reply({ content: 'Your vote has been counted!', ephemeral: true });
 
-                await interaction.editReply({
-                    content: `📢 **PRICE CHANGE PROPOSAL** 📢\n` +
-                             `**Item:** ${item.toUpperCase()}\n` +
-                             `**Proposed Selling Price:** ${formatPrice(newSell)} | **Proposed Buying Price:** ${formatPrice(newBuy)}\n\n` +
-                             `*Requires **${requiredVotes}** votes (50% of server) to pass.*\n` +
-                             `✅ **Current Votes:** ${votedUsers.size} / ${requiredVotes}\n` +
-                             `⏳ *Time remaining: 30 minutes.*`
-                });
+                const updatedVoteEmbed = new EmbedBuilder()
+                    .setColor('#5865F2')
+                    .setTitle('📢 Price Change Proposal')
+                    .setDescription(
+                        `### ${item.toUpperCase()}\n\n` +
+                        `🟢 **Proposed Selling:** **${formatPrice(newSell)}**\n` +
+                        `🔴 **Proposed Buying:** **${formatPrice(newBuy)}**\n\n` +
+                        `📊 **Votes:** \`${votedUsers.size} / ${requiredVotes}\` (Requires 50% of server)\n` +
+                        `⏳ *Voting ends in 30 minutes.*`
+                    )
+                    .setFooter({ text: 'Crown Empire Community Governance' });
+
+                await interaction.editReply({ embeds: [updatedVoteEmbed] });
 
                 if (votedUsers.size >= requiredVotes) {
                     priceIndex[item] = { buy: newSell, sell: newBuy };
                     fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
+
+                    const passedEmbed = new EmbedBuilder()
+                        .setColor('#2ECC71')
+                        .setTitle('🎉 Vote Passed!')
+                        .setDescription(
+                            `Official prices for **${item.toUpperCase()}** have been updated!\n\n` +
+                            `🟢 **Selling:** **${formatPrice(newSell)}**\n` +
+                            `🔴 **Buying:** **${formatPrice(newBuy)}**`
+                        );
                     
-                    await interaction.followUp(`🎉 **VOTE PASSED!** The official Crown Empire prices for **${item.toUpperCase()}** are now **Selling:** ${formatPrice(newSell)} | **Buying:** ${formatPrice(newBuy)}.`);
+                    await interaction.followUp({ embeds: [passedEmbed] });
                     collector.stop('passed');
                 }
             }
@@ -260,7 +308,12 @@ client.on('interactionCreate', async interaction => {
             await interaction.editReply({ components: [] });
 
             if (reason !== 'passed') {
-                await interaction.followUp(`❌ **VOTE FAILED!** The proposal for **${item.toUpperCase()}** only received ${votedUsers.size}/${requiredVotes} votes before time ran out.`);
+                const failedEmbed = new EmbedBuilder()
+                    .setColor('#E74C3C')
+                    .setTitle('❌ Vote Failed')
+                    .setDescription(`The proposal for **${item.toUpperCase()}** expired without reaching enough votes.`);
+
+                await interaction.followUp({ embeds: [failedEmbed] });
             }
         });
     }
@@ -276,6 +329,5 @@ process.on('uncaughtException', (err) => {
 process.on('uncaughtExceptionMonitor', (err, origin) => {
     console.error('Uncaught Exception Monitor:', err, origin);
 });
-// -------------------------
 
 client.login(process.env.TOKEN);
