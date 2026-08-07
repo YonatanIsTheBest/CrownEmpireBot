@@ -8,6 +8,7 @@ app.listen(port, () => console.log(`Web server listening on port ${port}`));
 require('dotenv').config();
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
 const fs = require('fs');
+const mongoose = require('mongoose');
 
 // 👇 AUTHORIZED ADMIN IDS 👇
 const ADMIN_ROLE_ID = '1533611128284909608'; 
@@ -22,8 +23,13 @@ const client = new Client({
     ] 
 });
 
-// 👑 Dynamically load the Crown Empire Price Index
-let priceIndex = JSON.parse(fs.readFileSync('./prices.json', 'utf8'));
+// --- MONGODB SCHEMA ---
+const itemSchema = new mongoose.Schema({
+    name: { type: String, required: true, unique: true },
+    ownerSellPrice: { type: Number, required: true },
+    ownerBuyPrice: { type: Number, required: true }
+});
+const Item = mongoose.model('Item', itemSchema);
 
 // 🔠 Formatter: Converts "steel ingot" to "Steel Ingot"
 function toTitleCase(str) {
@@ -74,7 +80,34 @@ function parsePrice(input) {
 }
 
 client.once('ready', async () => {
-    console.log('👑 Crown Empire Bot is officially online!');
+    console.log('👑 Crown Empire Bot is starting up...');
+
+    // --- CONNECT TO DATABASE & MIGRATE DATA ---
+    try {
+        await mongoose.connect(process.env.MONGO_URI);
+        console.log('✅ Connected to MongoDB Atlas permanently!');
+        
+        // Auto-migration: If the database is empty, load prices.json!
+        const count = await Item.countDocuments();
+        if (count === 0 && fs.existsSync('./prices.json')) {
+            console.log('📦 Database is empty! Migrating items from prices.json...');
+            const priceIndex = JSON.parse(fs.readFileSync('./prices.json', 'utf8'));
+            
+            const itemsToInsert = [];
+            for (const [itemName, prices] of Object.entries(priceIndex)) {
+                itemsToInsert.push({
+                    name: itemName,
+                    ownerSellPrice: prices.buy, // Legacy mapping from the JSON file
+                    ownerBuyPrice: prices.sell
+                });
+            }
+            
+            await Item.insertMany(itemsToInsert);
+            console.log(`✅ Successfully migrated ${itemsToInsert.length} items to MongoDB cloud!`);
+        }
+    } catch (err) {
+        console.error('❌ MongoDB Connection Error:', err);
+    }
 
     const priceCommand = {
         name: 'price',
@@ -121,7 +154,6 @@ client.once('ready', async () => {
         ]
     };
 
-    // 🆕 Command to delete an item entirely
     const removeItemCommand = {
         name: 'removeitem',
         description: 'Remove an item completely from the database (Admin only)',
@@ -136,15 +168,16 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
     
-    // 🧠 AUTOCOMPLETE LOGIC (Now formatted in Title Case)
+    // 🧠 AUTOCOMPLETE LOGIC (Reads directly from MongoDB)
     if (interaction.isAutocomplete()) {
         const focusedValue = interaction.options.getFocused().toLowerCase();
-        const choices = Object.keys(priceIndex);
-        const filtered = choices.filter(choice => choice.includes(focusedValue));
         
-        const respondChoices = filtered.slice(0, 25).map(choice => ({
-            name: toTitleCase(choice), 
-            value: choice,             
+        // Find top 25 items matching the search
+        const choices = await Item.find({ name: new RegExp(focusedValue, 'i') }).limit(25);
+        
+        const respondChoices = choices.map(choice => ({
+            name: toTitleCase(choice.name), 
+            value: choice.name,             
         }));
 
         await interaction.respond(respondChoices);
@@ -159,19 +192,17 @@ client.on('interactionCreate', async interaction => {
 
     // --- /PRICE COMMAND ---
     if (interaction.commandName === 'price') {
-        const item = interaction.options.getString('item').toLowerCase().trim();
+        const itemName = interaction.options.getString('item').toLowerCase().trim();
+        const itemData = await Item.findOne({ name: itemName });
 
-        if (priceIndex[item]) {
-            const ownerSellPrice = priceIndex[item].buy; 
-            const ownerBuyPrice = priceIndex[item].sell;
-
+        if (itemData) {
             const priceEmbed = new EmbedBuilder()
                 .setColor('#8A2BE2') 
                 .setTitle('Price Results')
                 .setDescription(
-                    `### ${toTitleCase(item)}\n\n` +
-                    `🟢 **Selling price:** **${formatPrice(ownerSellPrice)}**\n` +
-                    `🔴 **Buying price:** **${formatPrice(ownerBuyPrice)}**`
+                    `### ${toTitleCase(itemData.name)}\n\n` +
+                    `🟢 **Selling price:** **${formatPrice(itemData.ownerSellPrice)}**\n` +
+                    `🔴 **Buying price:** **${formatPrice(itemData.ownerBuyPrice)}**`
                 )
                 .setFooter({ text: 'Crown Empire Economy' });
 
@@ -179,7 +210,7 @@ client.on('interactionCreate', async interaction => {
         } else {
             const notFoundEmbed = new EmbedBuilder()
                 .setColor('#FF4D4D')
-                .setDescription(`❌ The Crown Empire has not set official prices for **"${toTitleCase(item)}"** yet.`);
+                .setDescription(`❌ The Crown Empire has not set official prices for **"${toTitleCase(itemName)}"** yet.`);
             
             await interaction.reply({ embeds: [notFoundEmbed], ephemeral: true });
         }
@@ -191,29 +222,29 @@ client.on('interactionCreate', async interaction => {
             return interaction.reply({ content: '❌ You do not have permission to force-change prices.', ephemeral: true });
         }
 
-        const item = interaction.options.getString('item').toLowerCase().trim();
-        const rawSell = interaction.options.getString('sell_price');
-        const rawBuy = interaction.options.getString('buy_price');
-        
-        const newSell = parsePrice(rawSell);
-        const newBuy = parsePrice(rawBuy);
+        const itemName = interaction.options.getString('item').toLowerCase().trim();
+        const newSell = parsePrice(interaction.options.getString('sell_price'));
+        const newBuy = parsePrice(interaction.options.getString('buy_price'));
 
         if (newSell === null || newBuy === null) {
-            return interaction.reply({ content: '❌ Invalid price format! Please use numbers like `450000` or abbreviations like `4.5M`, `200k`, `1.5B`.', ephemeral: true });
+            return interaction.reply({ content: '❌ Invalid price format! Use numbers like `450000` or `4.5M`.', ephemeral: true });
         }
 
-        if (!priceIndex[item]) {
-            return interaction.reply({ content: `❌ **${toTitleCase(item)}** is not in the database yet. Use \`/additem\` instead!`, ephemeral: true });
-        }
+        const itemData = await Item.findOneAndUpdate(
+            { name: itemName }, 
+            { ownerSellPrice: newSell, ownerBuyPrice: newBuy },
+            { new: true }
+        );
 
-        priceIndex[item] = { buy: newSell, sell: newBuy };
-        fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
+        if (!itemData) {
+            return interaction.reply({ content: `❌ **${toTitleCase(itemName)}** is not in the database yet. Use \`/additem\` instead!`, ephemeral: true });
+        }
 
         const adminEmbed = new EmbedBuilder()
             .setColor('#FFD700') 
             .setTitle('👑 Admin Price Override')
             .setDescription(
-                `### ${toTitleCase(item)}\n\n` +
+                `### ${toTitleCase(itemData.name)}\n\n` +
                 `🟢 **New Selling price:** **${formatPrice(newSell)}**\n` +
                 `🔴 **New Buying price:** **${formatPrice(newBuy)}**`
             )
@@ -228,29 +259,26 @@ client.on('interactionCreate', async interaction => {
             return interaction.reply({ content: '❌ You do not have permission to add items.', ephemeral: true });
         }
 
-        const item = interaction.options.getString('item').toLowerCase().trim();
-        const rawSell = interaction.options.getString('sell_price');
-        const rawBuy = interaction.options.getString('buy_price');
-        
-        const newSell = parsePrice(rawSell);
-        const newBuy = parsePrice(rawBuy);
+        const itemName = interaction.options.getString('item').toLowerCase().trim();
+        const newSell = parsePrice(interaction.options.getString('sell_price'));
+        const newBuy = parsePrice(interaction.options.getString('buy_price'));
 
         if (newSell === null || newBuy === null) {
-            return interaction.reply({ content: '❌ Invalid price format! Please use numbers like `450000` or abbreviations like `4.5M`, `200k`, `1.5B`.', ephemeral: true });
+            return interaction.reply({ content: '❌ Invalid price format! Use numbers like `450000` or `4.5M`.', ephemeral: true });
         }
 
-        if (priceIndex[item]) {
-            return interaction.reply({ content: `❌ **${toTitleCase(item)}** already exists! Use \`/pricechange\` to update it.`, ephemeral: true });
+        const existingItem = await Item.findOne({ name: itemName });
+        if (existingItem) {
+            return interaction.reply({ content: `❌ **${toTitleCase(itemName)}** already exists! Use \`/pricechange\` to update it.`, ephemeral: true });
         }
 
-        priceIndex[item] = { buy: newSell, sell: newBuy };
-        fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
+        await Item.create({ name: itemName, ownerSellPrice: newSell, ownerBuyPrice: newBuy });
 
         const addEmbed = new EmbedBuilder()
             .setColor('#00FF7F')
             .setTitle('✅ Item Added')
             .setDescription(
-                `### ${toTitleCase(item)}\n\n` +
+                `### ${toTitleCase(itemName)}\n\n` +
                 `🟢 **Selling price:** **${formatPrice(newSell)}**\n` +
                 `🔴 **Buying price:** **${formatPrice(newBuy)}**`
             );
@@ -267,16 +295,18 @@ client.on('interactionCreate', async interaction => {
         const oldName = interaction.options.getString('old_name').toLowerCase().trim();
         const newName = interaction.options.getString('new_name').toLowerCase().trim();
 
-        if (!priceIndex[oldName]) {
+        const oldItem = await Item.findOne({ name: oldName });
+        if (!oldItem) {
             return interaction.reply({ content: `❌ **${toTitleCase(oldName)}** was not found in the database.`, ephemeral: true });
         }
-        if (priceIndex[newName]) {
+
+        const newItemExists = await Item.findOne({ name: newName });
+        if (newItemExists) {
             return interaction.reply({ content: `❌ **${toTitleCase(newName)}** already exists! Choose a different name.`, ephemeral: true });
         }
 
-        priceIndex[newName] = priceIndex[oldName];
-        delete priceIndex[oldName];
-        fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
+        oldItem.name = newName;
+        await oldItem.save();
 
         const renameEmbed = new EmbedBuilder()
             .setColor('#3498DB')
@@ -292,35 +322,29 @@ client.on('interactionCreate', async interaction => {
             return interaction.reply({ content: '❌ You do not have permission to remove items.', ephemeral: true });
         }
 
-        const item = interaction.options.getString('item').toLowerCase().trim();
+        const itemName = interaction.options.getString('item').toLowerCase().trim();
+        const deletedItem = await Item.findOneAndDelete({ name: itemName });
 
-        if (!priceIndex[item]) {
-            return interaction.reply({ content: `❌ **${toTitleCase(item)}** was not found in the database.`, ephemeral: true });
+        if (!deletedItem) {
+            return interaction.reply({ content: `❌ **${toTitleCase(itemName)}** was not found in the database.`, ephemeral: true });
         }
 
-        // Delete the item from the object and save
-        delete priceIndex[item];
-        fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
-
         const removeEmbed = new EmbedBuilder()
-            .setColor('#E74C3C') // Red styling for deletion
+            .setColor('#E74C3C') 
             .setTitle('🗑️ Item Removed')
-            .setDescription(`Successfully deleted **${toTitleCase(item)}** from the database.`);
+            .setDescription(`Successfully deleted **${toTitleCase(itemName)}** from the cloud database.`);
 
         return interaction.reply({ embeds: [removeEmbed] });
     }
 
     // --- /VOTEPRICE COMMAND ---
     if (interaction.commandName === 'voteprice') {
-        const item = interaction.options.getString('item').toLowerCase().trim();
-        const rawSell = interaction.options.getString('sell_price');
-        const rawBuy = interaction.options.getString('buy_price');
-        
-        const newSell = parsePrice(rawSell);
-        const newBuy = parsePrice(rawBuy);
+        const itemName = interaction.options.getString('item').toLowerCase().trim();
+        const newSell = parsePrice(interaction.options.getString('sell_price'));
+        const newBuy = parsePrice(interaction.options.getString('buy_price'));
 
         if (newSell === null || newBuy === null) {
-            return interaction.reply({ content: '❌ Invalid price format! Please use numbers like `450000` or abbreviations like `4.5M`, `200k`, `1.5B`.', ephemeral: true });
+            return interaction.reply({ content: '❌ Invalid price format! Use numbers like `450000` or `4.5M`.', ephemeral: true });
         }
 
         const totalMembers = interaction.guild.memberCount || 2; 
@@ -330,7 +354,7 @@ client.on('interactionCreate', async interaction => {
             .setColor('#5865F2') 
             .setTitle('📢 Price Change Proposal')
             .setDescription(
-                `### ${toTitleCase(item)}\n\n` +
+                `### ${toTitleCase(itemName)}\n\n` +
                 `🟢 **Proposed Selling:** **${formatPrice(newSell)}**\n` +
                 `🔴 **Proposed Buying:** **${formatPrice(newBuy)}**\n\n` +
                 `📊 **Votes:** \`0 / ${requiredVotes}\` (Requires 50% of server)\n` +
@@ -367,7 +391,7 @@ client.on('interactionCreate', async interaction => {
                     .setColor('#5865F2')
                     .setTitle('📢 Price Change Proposal')
                     .setDescription(
-                        `### ${toTitleCase(item)}\n\n` +
+                        `### ${toTitleCase(itemName)}\n\n` +
                         `🟢 **Proposed Selling:** **${formatPrice(newSell)}**\n` +
                         `🔴 **Proposed Buying:** **${formatPrice(newBuy)}**\n\n` +
                         `📊 **Votes:** \`${votedUsers.size} / ${requiredVotes}\` (Requires 50% of server)\n` +
@@ -378,14 +402,22 @@ client.on('interactionCreate', async interaction => {
                 await interaction.editReply({ embeds: [updatedVoteEmbed] });
 
                 if (votedUsers.size >= requiredVotes) {
-                    priceIndex[item] = { buy: newSell, sell: newBuy };
-                    fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
+                    
+                    // Update or create the item in MongoDB
+                    const existingItem = await Item.findOne({ name: itemName });
+                    if (existingItem) {
+                        existingItem.ownerSellPrice = newSell;
+                        existingItem.ownerBuyPrice = newBuy;
+                        await existingItem.save();
+                    } else {
+                        await Item.create({ name: itemName, ownerSellPrice: newSell, ownerBuyPrice: newBuy });
+                    }
 
                     const passedEmbed = new EmbedBuilder()
                         .setColor('#2ECC71')
                         .setTitle('🎉 Vote Passed!')
                         .setDescription(
-                            `Official prices for **${toTitleCase(item)}** have been updated!\n\n` +
+                            `Official prices for **${toTitleCase(itemName)}** have been saved to the cloud!\n\n` +
                             `🟢 **Selling:** **${formatPrice(newSell)}**\n` +
                             `🔴 **Buying:** **${formatPrice(newBuy)}**`
                         );
@@ -403,7 +435,7 @@ client.on('interactionCreate', async interaction => {
                 const failedEmbed = new EmbedBuilder()
                     .setColor('#E74C3C')
                     .setTitle('❌ Vote Failed')
-                    .setDescription(`The proposal for **${toTitleCase(item)}** expired without reaching enough votes.`);
+                    .setDescription(`The proposal for **${toTitleCase(itemName)}** expired without reaching enough votes.`);
 
                 await interaction.followUp({ embeds: [failedEmbed] });
             }
