@@ -25,6 +25,11 @@ const client = new Client({
 // 👑 Dynamically load the Crown Empire Price Index
 let priceIndex = JSON.parse(fs.readFileSync('./prices.json', 'utf8'));
 
+// 🔠 Formatter: Converts "steel ingot" to "Steel Ingot"
+function toTitleCase(str) {
+    return str.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
+}
+
 // 🔢 Formatter: Converts long numbers into text (e.g. 4500000 -> 4.5M)
 function formatPrice(num) {
     if (num === 0) return "0";
@@ -122,15 +127,15 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
     
-    // 🧠 AUTOCOMPLETE LOGIC
+    // 🧠 AUTOCOMPLETE LOGIC (Now formatted in Title Case)
     if (interaction.isAutocomplete()) {
         const focusedValue = interaction.options.getFocused().toLowerCase();
         const choices = Object.keys(priceIndex);
         const filtered = choices.filter(choice => choice.includes(focusedValue));
         
         const respondChoices = filtered.slice(0, 25).map(choice => ({
-            name: choice,
-            value: choice,
+            name: toTitleCase(choice), // Shows beautifully formatted names to the user
+            value: choice,             // Sends the safe lowercase key to the database
         }));
 
         await interaction.respond(respondChoices);
@@ -139,7 +144,7 @@ client.on('interactionCreate', async interaction => {
 
     if (!interaction.isChatInputCommand()) return;
 
-    // 🛡️ Bulletproof Admin Check (prevents crashes in DMs or cache misses)
+    // 🛡️ Bulletproof Admin Check
     const hasRole = interaction.member && interaction.member.roles && interaction.member.roles.cache.has(ADMIN_ROLE_ID);
     const isAdmin = hasRole || interaction.user.id === ADMIN_USER_ID;
 
@@ -155,7 +160,7 @@ client.on('interactionCreate', async interaction => {
                 .setColor('#8A2BE2') 
                 .setTitle('Price Results')
                 .setDescription(
-                    `### ${item.toUpperCase()}\n\n` +
+                    `### ${toTitleCase(item)}\n\n` +
                     `🟢 **Selling price:** **${formatPrice(ownerSellPrice)}**\n` +
                     `🔴 **Buying price:** **${formatPrice(ownerBuyPrice)}**`
                 )
@@ -165,7 +170,7 @@ client.on('interactionCreate', async interaction => {
         } else {
             const notFoundEmbed = new EmbedBuilder()
                 .setColor('#FF4D4D')
-                .setDescription(`❌ The Crown Empire has not set official prices for **"${item}"** yet.`);
+                .setDescription(`❌ The Crown Empire has not set official prices for **"${toTitleCase(item)}"** yet.`);
             
             await interaction.reply({ embeds: [notFoundEmbed], ephemeral: true });
         }
@@ -189,7 +194,7 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (!priceIndex[item]) {
-            return interaction.reply({ content: `❌ **${item.toUpperCase()}** is not in the database yet. Use \`/additem\` instead!`, ephemeral: true });
+            return interaction.reply({ content: `❌ **${toTitleCase(item)}** is not in the database yet. Use \`/additem\` instead!`, ephemeral: true });
         }
 
         priceIndex[item] = { buy: newSell, sell: newBuy };
@@ -199,7 +204,7 @@ client.on('interactionCreate', async interaction => {
             .setColor('#FFD700') 
             .setTitle('👑 Admin Price Override')
             .setDescription(
-                `### ${item.toUpperCase()}\n\n` +
+                `### ${toTitleCase(item)}\n\n` +
                 `🟢 **New Selling price:** **${formatPrice(newSell)}**\n` +
                 `🔴 **New Buying price:** **${formatPrice(newBuy)}**`
             )
@@ -226,7 +231,7 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (priceIndex[item]) {
-            return interaction.reply({ content: `❌ **${item.toUpperCase()}** already exists! Use \`/pricechange\` to update it.`, ephemeral: true });
+            return interaction.reply({ content: `❌ **${toTitleCase(item)}** already exists! Use \`/pricechange\` to update it.`, ephemeral: true });
         }
 
         priceIndex[item] = { buy: newSell, sell: newBuy };
@@ -236,7 +241,7 @@ client.on('interactionCreate', async interaction => {
             .setColor('#00FF7F')
             .setTitle('✅ Item Added')
             .setDescription(
-                `### ${item.toUpperCase()}\n\n` +
+                `### ${toTitleCase(item)}\n\n` +
                 `🟢 **Selling price:** **${formatPrice(newSell)}**\n` +
                 `🔴 **Buying price:** **${formatPrice(newBuy)}**`
             );
@@ -254,10 +259,10 @@ client.on('interactionCreate', async interaction => {
         const newName = interaction.options.getString('new_name').toLowerCase().trim();
 
         if (!priceIndex[oldName]) {
-            return interaction.reply({ content: `❌ **${oldName.toUpperCase()}** was not found in the database.`, ephemeral: true });
+            return interaction.reply({ content: `❌ **${toTitleCase(oldName)}** was not found in the database.`, ephemeral: true });
         }
         if (priceIndex[newName]) {
-            return interaction.reply({ content: `❌ **${newName.toUpperCase()}** already exists! Choose a different name.`, ephemeral: true });
+            return interaction.reply({ content: `❌ **${toTitleCase(newName)}** already exists! Choose a different name.`, ephemeral: true });
         }
 
         priceIndex[newName] = priceIndex[oldName];
@@ -267,7 +272,7 @@ client.on('interactionCreate', async interaction => {
         const renameEmbed = new EmbedBuilder()
             .setColor('#3498DB')
             .setTitle('🔄 Item Renamed')
-            .setDescription(`Successfully changed **${oldName.toUpperCase()}** ➔ **${newName.toUpperCase()}**`);
+            .setDescription(`Successfully changed **${toTitleCase(oldName)}** ➔ **${toTitleCase(newName)}**`);
 
         return interaction.reply({ embeds: [renameEmbed] });
     }
@@ -285,14 +290,14 @@ client.on('interactionCreate', async interaction => {
             return interaction.reply({ content: '❌ Invalid price format! Please use numbers like `450000` or abbreviations like `4.5M`, `200k`, `1.5B`.', ephemeral: true });
         }
 
-        const totalMembers = interaction.guild.memberCount || 2; // Fallback to 2 to prevent division by zero in DMs
+        const totalMembers = interaction.guild.memberCount || 2; 
         const requiredVotes = Math.ceil(totalMembers / 2);
 
         const voteEmbed = new EmbedBuilder()
             .setColor('#5865F2') 
             .setTitle('📢 Price Change Proposal')
             .setDescription(
-                `### ${item.toUpperCase()}\n\n` +
+                `### ${toTitleCase(item)}\n\n` +
                 `🟢 **Proposed Selling:** **${formatPrice(newSell)}**\n` +
                 `🔴 **Proposed Buying:** **${formatPrice(newBuy)}**\n\n` +
                 `📊 **Votes:** \`0 / ${requiredVotes}\` (Requires 50% of server)\n` +
@@ -329,7 +334,7 @@ client.on('interactionCreate', async interaction => {
                     .setColor('#5865F2')
                     .setTitle('📢 Price Change Proposal')
                     .setDescription(
-                        `### ${item.toUpperCase()}\n\n` +
+                        `### ${toTitleCase(item)}\n\n` +
                         `🟢 **Proposed Selling:** **${formatPrice(newSell)}**\n` +
                         `🔴 **Proposed Buying:** **${formatPrice(newBuy)}**\n\n` +
                         `📊 **Votes:** \`${votedUsers.size} / ${requiredVotes}\` (Requires 50% of server)\n` +
@@ -347,7 +352,7 @@ client.on('interactionCreate', async interaction => {
                         .setColor('#2ECC71')
                         .setTitle('🎉 Vote Passed!')
                         .setDescription(
-                            `Official prices for **${item.toUpperCase()}** have been updated!\n\n` +
+                            `Official prices for **${toTitleCase(item)}** have been updated!\n\n` +
                             `🟢 **Selling:** **${formatPrice(newSell)}**\n` +
                             `🔴 **Buying:** **${formatPrice(newBuy)}**`
                         );
@@ -365,7 +370,7 @@ client.on('interactionCreate', async interaction => {
                 const failedEmbed = new EmbedBuilder()
                     .setColor('#E74C3C')
                     .setTitle('❌ Vote Failed')
-                    .setDescription(`The proposal for **${item.toUpperCase()}** expired without reaching enough votes.`);
+                    .setDescription(`The proposal for **${toTitleCase(item)}** expired without reaching enough votes.`);
 
                 await interaction.followUp({ embeds: [failedEmbed] });
             }
