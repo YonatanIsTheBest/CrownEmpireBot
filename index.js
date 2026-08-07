@@ -139,8 +139,9 @@ client.on('interactionCreate', async interaction => {
 
     if (!interaction.isChatInputCommand()) return;
 
-    // Helper variable to check if the user is an admin
-    const isAdmin = interaction.member.roles.cache.has(ADMIN_ROLE_ID) || interaction.user.id === ADMIN_USER_ID;
+    // 🛡️ Bulletproof Admin Check (prevents crashes in DMs or cache misses)
+    const hasRole = interaction.member && interaction.member.roles && interaction.member.roles.cache.has(ADMIN_ROLE_ID);
+    const isAdmin = hasRole || interaction.user.id === ADMIN_USER_ID;
 
     // --- /PRICE COMMAND ---
     if (interaction.commandName === 'price') {
@@ -284,7 +285,7 @@ client.on('interactionCreate', async interaction => {
             return interaction.reply({ content: '❌ Invalid price format! Please use numbers like `450000` or abbreviations like `4.5M`, `200k`, `1.5B`.', ephemeral: true });
         }
 
-        const totalMembers = interaction.guild.memberCount;
+        const totalMembers = interaction.guild.memberCount || 2; // Fallback to 2 to prevent division by zero in DMs
         const requiredVotes = Math.ceil(totalMembers / 2);
 
         const voteEmbed = new EmbedBuilder()
