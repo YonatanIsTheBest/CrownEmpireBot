@@ -21,16 +21,15 @@ const client = new Client({
 // 👑 Dynamically load the Crown Empire Price Index
 let priceIndex = JSON.parse(fs.readFileSync('./prices.json', 'utf8'));
 
-// 🔢 NEW: Formatter function to convert long numbers into M and k
+// Formatter function to convert long numbers into M and k
 function formatPrice(num) {
     if (num === 0) return "0";
     if (num >= 1000000) {
-        // parseFloat automatically removes trailing zeros, while toFixed(2) rounds up 199999999 to 200M
         return parseFloat((num / 1000000).toFixed(2)) + 'M';
     } else if (num >= 1000) {
         return parseFloat((num / 1000).toFixed(2)) + 'k';
     }
-    return num.toLocaleString(); // Adds commas to smaller numbers like 500
+    return num.toLocaleString(); 
 }
 
 client.once('ready', async () => {
@@ -45,6 +44,7 @@ client.once('ready', async () => {
                 description: 'The item you want to check',
                 type: 3, 
                 required: true,
+                autocomplete: true // 👈 Enables the dropdown menu
             }
         ]
     };
@@ -58,16 +58,17 @@ client.once('ready', async () => {
                 description: 'The item to change (e.g., copper ingot)',
                 type: 3,
                 required: true,
+                autocomplete: true // 👈 Enables the dropdown menu
             },
             {
                 name: 'sell_price',
-                description: 'Price YOU SELL to players (e.g. 200000 for gold)',
+                description: 'Price YOU SELL to players (e.g. 200000)',
                 type: 4, 
                 required: true,
             },
             {
                 name: 'buy_price',
-                description: 'Price YOU BUY from players (e.g. 80000 for gold)',
+                description: 'Price YOU BUY from players (e.g. 80000)',
                 type: 4,
                 required: true,
             }
@@ -83,6 +84,7 @@ client.once('ready', async () => {
                 description: 'The item name to update',
                 type: 3,
                 required: true,
+                autocomplete: true // 👈 Enables the dropdown menu
             },
             {
                 name: 'sell_price',
@@ -100,10 +102,33 @@ client.once('ready', async () => {
     };
 
     await client.application.commands.set([priceCommand, voteCommand, priceChangeCommand]);
-    console.log('✅ Slash commands successfully registered!');
+    console.log('✅ Slash commands with autocomplete successfully registered!');
 });
 
 client.on('interactionCreate', async interaction => {
+    
+    // 🧠 --- AUTOCOMPLETE LOGIC ---
+    if (interaction.isAutocomplete()) {
+        // Get whatever the user has typed so far
+        const focusedValue = interaction.options.getFocused().toLowerCase();
+        
+        // Grab all the item names from our database
+        const choices = Object.keys(priceIndex);
+        
+        // Filter the list to only include items that match what they typed
+        const filtered = choices.filter(choice => choice.includes(focusedValue));
+        
+        // Discord only allows a maximum of 25 items in a dropdown at once
+        const respondChoices = filtered.slice(0, 25).map(choice => ({
+            name: choice,
+            value: choice,
+        }));
+
+        await interaction.respond(respondChoices);
+        return; // Stop here so it doesn't try to run it as a command yet
+    }
+
+    // If it's not a slash command, stop here
     if (!interaction.isChatInputCommand()) return;
 
     // --- /PRICE COMMAND LOGIC ---
@@ -119,7 +144,6 @@ client.on('interactionCreate', async interaction => {
             const minBuy = Math.floor(ownerBuyPrice * 0.90);
             const maxBuy = Math.ceil(ownerBuyPrice * 1.10);
 
-            // Wrap all variables in formatPrice() for a clean visual output
             await interaction.reply(
                 `**${item.toUpperCase()}**\n` +
                 `**🟢 SELLING (You sell to players)**\n> Base Price: **${formatPrice(ownerSellPrice)}**\n> 10% Range: **${formatPrice(minSell)}** - **${formatPrice(maxSell)}**\n\n` +
