@@ -193,6 +193,8 @@ client.on('interactionCreate', async interaction => {
     // --- /PRICE COMMAND ---
     if (interaction.commandName === 'price') {
         const itemName = interaction.options.getString('item').toLowerCase().trim();
+        
+        // 1. First, try to find the exact item they typed
         const itemData = await Item.findOne({ name: itemName });
 
         if (itemData) {
@@ -208,11 +210,31 @@ client.on('interactionCreate', async interaction => {
 
             await interaction.reply({ embeds: [priceEmbed] });
         } else {
-            const notFoundEmbed = new EmbedBuilder()
-                .setColor('#FF4D4D')
-                .setDescription(`❌ The Crown Empire has not set official prices for **"${toTitleCase(itemName)}"** yet.`);
+            // 2. If exact match fails, search for ANYTHING containing those words!
+            const partialMatches = await Item.find({ name: new RegExp(itemName, 'i') }).limit(10);
             
-            await interaction.reply({ embeds: [notFoundEmbed], ephemeral: true });
+            if (partialMatches.length > 0) {
+                // We found similar items! Let's list them out.
+                const suggestionList = partialMatches.map(i => `• **${toTitleCase(i.name)}**`).join('\n');
+                
+                const searchEmbed = new EmbedBuilder()
+                    .setColor('#FF9900') // Orange warning color
+                    .setTitle('🔍 Multiple Items Found')
+                    .setDescription(
+                        `We couldn't find an exact match for **"${toTitleCase(itemName)}"**, but we found these similar items in the database:\n\n` +
+                        `${suggestionList}\n\n` +
+                        `*Tip: Try using the command again and click one of these names from the pop-up menu!*`
+                    );
+                
+                await interaction.reply({ embeds: [searchEmbed], ephemeral: true });
+            } else {
+                // Absolutely nothing matched
+                const notFoundEmbed = new EmbedBuilder()
+                    .setColor('#FF4D4D') // Red error color
+                    .setDescription(`❌ The Crown Empire has not set official prices for **"${toTitleCase(itemName)}"** yet.`);
+                
+                await interaction.reply({ embeds: [notFoundEmbed], ephemeral: true });
+            }
         }
     }
 
