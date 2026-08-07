@@ -9,8 +9,9 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
 const fs = require('fs');
 
-// 👇 PASTE YOUR AUTHORIZED ADMIN ROLE ID HERE 👇
+// 👇 AUTHORIZED ADMIN IDS 👇
 const ADMIN_ROLE_ID = '1533611128284909608'; 
+const ADMIN_USER_ID = '1512980123727429798';
 
 const client = new Client({ 
     intents: [
@@ -24,7 +25,7 @@ const client = new Client({
 // 👑 Dynamically load the Crown Empire Price Index
 let priceIndex = JSON.parse(fs.readFileSync('./prices.json', 'utf8'));
 
-// 🔢 Formatter function for T, B, M, k
+// 🔢 Formatter: Converts long numbers into text (e.g. 4500000 -> 4.5M)
 function formatPrice(num) {
     if (num === 0) return "0";
     if (num >= 1000000000000) {
@@ -37,6 +38,34 @@ function formatPrice(num) {
         return parseFloat((num / 1000).toFixed(2)) + 'k';
     }
     return num.toLocaleString(); 
+}
+
+// 🧮 Parser: Converts text back into raw numbers (e.g. "4.5M" -> 4500000)
+function parsePrice(input) {
+    if (!input) return null;
+    const cleanInput = input.toString().trim().toUpperCase();
+    
+    let multiplier = 1;
+    let numberPart = cleanInput;
+
+    if (cleanInput.endsWith('T')) {
+        multiplier = 1000000000000;
+        numberPart = cleanInput.slice(0, -1);
+    } else if (cleanInput.endsWith('B')) {
+        multiplier = 1000000000;
+        numberPart = cleanInput.slice(0, -1);
+    } else if (cleanInput.endsWith('M')) {
+        multiplier = 1000000;
+        numberPart = cleanInput.slice(0, -1);
+    } else if (cleanInput.endsWith('K')) {
+        multiplier = 1000;
+        numberPart = cleanInput.slice(0, -1);
+    }
+
+    const number = parseFloat(numberPart);
+    if (isNaN(number)) return null;
+
+    return Math.floor(number * multiplier);
 }
 
 client.once('ready', async () => {
@@ -53,8 +82,8 @@ client.once('ready', async () => {
         description: 'Propose new shop prices to the server (30 min vote)',
         options: [
             { name: 'item', description: 'The item to change', type: 3, required: true, autocomplete: true },
-            { name: 'sell_price', description: 'Price YOU SELL to players', type: 4, required: true },
-            { name: 'buy_price', description: 'Price YOU BUY from players', type: 4, required: true }
+            { name: 'sell_price', description: 'Price YOU SELL to players (e.g. 4.5M)', type: 3, required: true },
+            { name: 'buy_price', description: 'Price YOU BUY from players (e.g. 200k)', type: 3, required: true }
         ]
     };
 
@@ -63,8 +92,8 @@ client.once('ready', async () => {
         description: 'Forcefully change the price of an EXISTING item (Admin only)',
         options: [
             { name: 'item', description: 'The item name to update', type: 3, required: true, autocomplete: true },
-            { name: 'sell_price', description: 'Price YOU SELL to players', type: 4, required: true },
-            { name: 'buy_price', description: 'Price YOU BUY from players', type: 4, required: true }
+            { name: 'sell_price', description: 'Price YOU SELL to players (e.g. 4.5M)', type: 3, required: true },
+            { name: 'buy_price', description: 'Price YOU BUY from players (e.g. 200k)', type: 3, required: true }
         ]
     };
 
@@ -73,8 +102,8 @@ client.once('ready', async () => {
         description: 'Insert a brand new item into the database (Admin only)',
         options: [
             { name: 'item', description: 'The NEW item name', type: 3, required: true },
-            { name: 'sell_price', description: 'Price YOU SELL to players', type: 4, required: true },
-            { name: 'buy_price', description: 'Price YOU BUY from players', type: 4, required: true }
+            { name: 'sell_price', description: 'Price YOU SELL to players (e.g. 4.5M)', type: 3, required: true },
+            { name: 'buy_price', description: 'Price YOU BUY from players (e.g. 200k)', type: 3, required: true }
         ]
     };
 
@@ -110,7 +139,10 @@ client.on('interactionCreate', async interaction => {
 
     if (!interaction.isChatInputCommand()) return;
 
-    // --- /PRICE COMMAND (MODERN EMBED UI) ---
+    // Helper variable to check if the user is an admin
+    const isAdmin = interaction.member.roles.cache.has(ADMIN_ROLE_ID) || interaction.user.id === ADMIN_USER_ID;
+
+    // --- /PRICE COMMAND ---
     if (interaction.commandName === 'price') {
         const item = interaction.options.getString('item').toLowerCase().trim();
 
@@ -119,7 +151,7 @@ client.on('interactionCreate', async interaction => {
             const ownerBuyPrice = priceIndex[item].sell;
 
             const priceEmbed = new EmbedBuilder()
-                .setColor('#8A2BE2') // Modern Royal Purple Accent Bar
+                .setColor('#8A2BE2') 
                 .setTitle('Price Results')
                 .setDescription(
                     `### ${item.toUpperCase()}\n\n` +
@@ -140,13 +172,20 @@ client.on('interactionCreate', async interaction => {
 
     // --- /PRICECHANGE COMMAND ---
     if (interaction.commandName === 'pricechange') {
-        if (!interaction.member.roles.cache.has(ADMIN_ROLE_ID)) {
+        if (!isAdmin) {
             return interaction.reply({ content: '❌ You do not have permission to force-change prices.', ephemeral: true });
         }
 
         const item = interaction.options.getString('item').toLowerCase().trim();
-        const newSell = interaction.options.getInteger('sell_price');
-        const newBuy = interaction.options.getInteger('buy_price');
+        const rawSell = interaction.options.getString('sell_price');
+        const rawBuy = interaction.options.getString('buy_price');
+        
+        const newSell = parsePrice(rawSell);
+        const newBuy = parsePrice(rawBuy);
+
+        if (newSell === null || newBuy === null) {
+            return interaction.reply({ content: '❌ Invalid price format! Please use numbers like `450000` or abbreviations like `4.5M`, `200k`, `1.5B`.', ephemeral: true });
+        }
 
         if (!priceIndex[item]) {
             return interaction.reply({ content: `❌ **${item.toUpperCase()}** is not in the database yet. Use \`/additem\` instead!`, ephemeral: true });
@@ -156,7 +195,7 @@ client.on('interactionCreate', async interaction => {
         fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
 
         const adminEmbed = new EmbedBuilder()
-            .setColor('#FFD700') // Gold Accent
+            .setColor('#FFD700') 
             .setTitle('👑 Admin Price Override')
             .setDescription(
                 `### ${item.toUpperCase()}\n\n` +
@@ -170,13 +209,20 @@ client.on('interactionCreate', async interaction => {
 
     // --- /ADDITEM COMMAND ---
     if (interaction.commandName === 'additem') {
-        if (!interaction.member.roles.cache.has(ADMIN_ROLE_ID)) {
+        if (!isAdmin) {
             return interaction.reply({ content: '❌ You do not have permission to add items.', ephemeral: true });
         }
 
         const item = interaction.options.getString('item').toLowerCase().trim();
-        const newSell = interaction.options.getInteger('sell_price');
-        const newBuy = interaction.options.getInteger('buy_price');
+        const rawSell = interaction.options.getString('sell_price');
+        const rawBuy = interaction.options.getString('buy_price');
+        
+        const newSell = parsePrice(rawSell);
+        const newBuy = parsePrice(rawBuy);
+
+        if (newSell === null || newBuy === null) {
+            return interaction.reply({ content: '❌ Invalid price format! Please use numbers like `450000` or abbreviations like `4.5M`, `200k`, `1.5B`.', ephemeral: true });
+        }
 
         if (priceIndex[item]) {
             return interaction.reply({ content: `❌ **${item.toUpperCase()}** already exists! Use \`/pricechange\` to update it.`, ephemeral: true });
@@ -199,7 +245,7 @@ client.on('interactionCreate', async interaction => {
 
     // --- /RENAMEITEM COMMAND ---
     if (interaction.commandName === 'renameitem') {
-        if (!interaction.member.roles.cache.has(ADMIN_ROLE_ID)) {
+        if (!isAdmin) {
             return interaction.reply({ content: '❌ You do not have permission to rename items.', ephemeral: true });
         }
 
@@ -225,17 +271,24 @@ client.on('interactionCreate', async interaction => {
         return interaction.reply({ embeds: [renameEmbed] });
     }
 
-    // --- /VOTEPRICE COMMAND (EMBED VOTING UI) ---
+    // --- /VOTEPRICE COMMAND ---
     if (interaction.commandName === 'voteprice') {
         const item = interaction.options.getString('item').toLowerCase().trim();
-        const newSell = interaction.options.getInteger('sell_price');
-        const newBuy = interaction.options.getInteger('buy_price');
+        const rawSell = interaction.options.getString('sell_price');
+        const rawBuy = interaction.options.getString('buy_price');
+        
+        const newSell = parsePrice(rawSell);
+        const newBuy = parsePrice(rawBuy);
+
+        if (newSell === null || newBuy === null) {
+            return interaction.reply({ content: '❌ Invalid price format! Please use numbers like `450000` or abbreviations like `4.5M`, `200k`, `1.5B`.', ephemeral: true });
+        }
 
         const totalMembers = interaction.guild.memberCount;
         const requiredVotes = Math.ceil(totalMembers / 2);
 
         const voteEmbed = new EmbedBuilder()
-            .setColor('#5865F2') // Discord Blurple
+            .setColor('#5865F2') 
             .setTitle('📢 Price Change Proposal')
             .setDescription(
                 `### ${item.toUpperCase()}\n\n` +
