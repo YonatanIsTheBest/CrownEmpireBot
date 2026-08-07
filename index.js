@@ -9,6 +9,9 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const fs = require('fs');
 
+// 👇 PASTE YOUR AUTHORIZED ADMIN ROLE ID HERE ONCE 👇
+const ADMIN_ROLE_ID = '1533611128284909608'; 
+
 const client = new Client({ 
     intents: [
         GatewayIntentBits.Guilds, 
@@ -21,10 +24,14 @@ const client = new Client({
 // 👑 Dynamically load the Crown Empire Price Index
 let priceIndex = JSON.parse(fs.readFileSync('./prices.json', 'utf8'));
 
-// Formatter function to convert long numbers into M and k
+// 🔢 Formatter function updated to handle Billions (B) and Trillions (T)
 function formatPrice(num) {
     if (num === 0) return "0";
-    if (num >= 1000000) {
+    if (num >= 1000000000000) {
+        return parseFloat((num / 1000000000000).toFixed(2)) + 'T';
+    } else if (num >= 1000000000) {
+        return parseFloat((num / 1000000000).toFixed(2)) + 'B';
+    } else if (num >= 1000000) {
         return parseFloat((num / 1000000).toFixed(2)) + 'M';
     } else if (num >= 1000) {
         return parseFloat((num / 1000).toFixed(2)) + 'k';
@@ -38,100 +45,74 @@ client.once('ready', async () => {
     const priceCommand = {
         name: 'price',
         description: 'Check the Crown Empire 10% price index for an item',
-        options: [
-            {
-                name: 'item',
-                description: 'The item you want to check',
-                type: 3, 
-                required: true,
-                autocomplete: true // 👈 Enables the dropdown menu
-            }
-        ]
+        options: [{ name: 'item', description: 'The item you want to check', type: 3, required: true, autocomplete: true }]
     };
 
     const voteCommand = {
         name: 'voteprice',
         description: 'Propose new shop prices to the server (30 min vote)',
         options: [
-            {
-                name: 'item',
-                description: 'The item to change (e.g., copper ingot)',
-                type: 3,
-                required: true,
-                autocomplete: true // 👈 Enables the dropdown menu
-            },
-            {
-                name: 'sell_price',
-                description: 'Price YOU SELL to players (e.g. 200000)',
-                type: 4, 
-                required: true,
-            },
-            {
-                name: 'buy_price',
-                description: 'Price YOU BUY from players (e.g. 80000)',
-                type: 4,
-                required: true,
-            }
+            { name: 'item', description: 'The item to change', type: 3, required: true, autocomplete: true },
+            { name: 'sell_price', description: 'Price YOU SELL to players', type: 4, required: true },
+            { name: 'buy_price', description: 'Price YOU BUY from players', type: 4, required: true }
         ]
     };
 
     const priceChangeCommand = {
         name: 'pricechange',
-        description: 'Forcefully change the price of an item without a vote (Admin only)',
+        description: 'Forcefully change the price of an EXISTING item (Admin only)',
         options: [
-            {
-                name: 'item',
-                description: 'The item name to update',
-                type: 3,
-                required: true,
-                autocomplete: true // 👈 Enables the dropdown menu
-            },
-            {
-                name: 'sell_price',
-                description: 'Price YOU SELL to players (e.g. 200000)',
-                type: 4,
-                required: true,
-            },
-            {
-                name: 'buy_price',
-                description: 'Price YOU BUY from players (e.g. 80000)',
-                type: 4,
-                required: true,
-            }
+            { name: 'item', description: 'The item name to update', type: 3, required: true, autocomplete: true },
+            { name: 'sell_price', description: 'Price YOU SELL to players', type: 4, required: true },
+            { name: 'buy_price', description: 'Price YOU BUY from players', type: 4, required: true }
         ]
     };
 
-    await client.application.commands.set([priceCommand, voteCommand, priceChangeCommand]);
-    console.log('✅ Slash commands with autocomplete successfully registered!');
+    // 🆕 Command to add a brand new item to the database
+    const addItemCommand = {
+        name: 'additem',
+        description: 'Insert a brand new item into the database (Admin only)',
+        options: [
+            { name: 'item', description: 'The NEW item name', type: 3, required: true },
+            { name: 'sell_price', description: 'Price YOU SELL to players', type: 4, required: true },
+            { name: 'buy_price', description: 'Price YOU BUY from players', type: 4, required: true }
+        ]
+    };
+
+    // 🆕 Command to rename an existing item
+    const renameItemCommand = {
+        name: 'renameitem',
+        description: 'Change the name of an existing item in the database (Admin only)',
+        options: [
+            { name: 'old_name', description: 'The current item name', type: 3, required: true, autocomplete: true },
+            { name: 'new_name', description: 'The new item name', type: 3, required: true }
+        ]
+    };
+
+    await client.application.commands.set([priceCommand, voteCommand, priceChangeCommand, addItemCommand, renameItemCommand]);
+    console.log('✅ All 5 Slash commands successfully registered!');
 });
 
 client.on('interactionCreate', async interaction => {
     
     // 🧠 --- AUTOCOMPLETE LOGIC ---
     if (interaction.isAutocomplete()) {
-        // Get whatever the user has typed so far
         const focusedValue = interaction.options.getFocused().toLowerCase();
-        
-        // Grab all the item names from our database
         const choices = Object.keys(priceIndex);
-        
-        // Filter the list to only include items that match what they typed
         const filtered = choices.filter(choice => choice.includes(focusedValue));
         
-        // Discord only allows a maximum of 25 items in a dropdown at once
         const respondChoices = filtered.slice(0, 25).map(choice => ({
             name: choice,
             value: choice,
         }));
 
         await interaction.respond(respondChoices);
-        return; // Stop here so it doesn't try to run it as a command yet
+        return;
     }
 
-    // If it's not a slash command, stop here
     if (!interaction.isChatInputCommand()) return;
 
-    // --- /PRICE COMMAND LOGIC ---
+    // --- /PRICE COMMAND ---
     if (interaction.commandName === 'price') {
         const item = interaction.options.getString('item').toLowerCase().trim();
 
@@ -154,31 +135,71 @@ client.on('interactionCreate', async interaction => {
         }
     }
 
-    // --- /PRICECHANGE COMMAND LOGIC (ADMIN OVERRIDE) ---
+    // --- /PRICECHANGE COMMAND ---
     if (interaction.commandName === 'pricechange') {
-        // 👇 PASTE YOUR AUTHORIZED ROLE ID HERE INSIDE THE QUOTES 👇
-        const requiredRoleId = '1533611128284909608'; 
-
-        if (!interaction.member.roles.cache.has(requiredRoleId)) {
-            return interaction.reply({ 
-                content: '❌ You do not have permission to force-change prices.', 
-                ephemeral: true 
-            });
+        if (!interaction.member.roles.cache.has(ADMIN_ROLE_ID)) {
+            return interaction.reply({ content: '❌ You do not have permission to force-change prices.', ephemeral: true });
         }
 
         const item = interaction.options.getString('item').toLowerCase().trim();
         const newSell = interaction.options.getInteger('sell_price');
         const newBuy = interaction.options.getInteger('buy_price');
 
+        if (!priceIndex[item]) {
+            return interaction.reply({ content: `❌ **${item.toUpperCase()}** is not in the database yet. Use \`/additem\` instead!`, ephemeral: true });
+        }
+
         priceIndex[item] = { buy: newSell, sell: newBuy };
         fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
 
-        return interaction.reply({ 
-            content: `👑 **Admin Override:** The official prices for **${item.toUpperCase()}** have been instantly updated to **Selling:** ${formatPrice(newSell)} | **Buying:** ${formatPrice(newBuy)}.` 
-        });
+        return interaction.reply({ content: `👑 **Admin Override:** **${item.toUpperCase()}** updated to **Selling:** ${formatPrice(newSell)} | **Buying:** ${formatPrice(newBuy)}.` });
     }
 
-    // --- /VOTEPRICE COMMAND LOGIC ---
+    // --- /ADDITEM COMMAND ---
+    if (interaction.commandName === 'additem') {
+        if (!interaction.member.roles.cache.has(ADMIN_ROLE_ID)) {
+            return interaction.reply({ content: '❌ You do not have permission to add items.', ephemeral: true });
+        }
+
+        const item = interaction.options.getString('item').toLowerCase().trim();
+        const newSell = interaction.options.getInteger('sell_price');
+        const newBuy = interaction.options.getInteger('buy_price');
+
+        if (priceIndex[item]) {
+            return interaction.reply({ content: `❌ **${item.toUpperCase()}** already exists in the database! Use \`/pricechange\` to update it.`, ephemeral: true });
+        }
+
+        priceIndex[item] = { buy: newSell, sell: newBuy };
+        fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
+
+        return interaction.reply({ content: `✅ **Added New Item:** **${item.toUpperCase()}** was added to the database at **Selling:** ${formatPrice(newSell)} | **Buying:** ${formatPrice(newBuy)}.` });
+    }
+
+    // --- /RENAMEITEM COMMAND ---
+    if (interaction.commandName === 'renameitem') {
+        if (!interaction.member.roles.cache.has(ADMIN_ROLE_ID)) {
+            return interaction.reply({ content: '❌ You do not have permission to rename items.', ephemeral: true });
+        }
+
+        const oldName = interaction.options.getString('old_name').toLowerCase().trim();
+        const newName = interaction.options.getString('new_name').toLowerCase().trim();
+
+        if (!priceIndex[oldName]) {
+            return interaction.reply({ content: `❌ **${oldName.toUpperCase()}** was not found in the database.`, ephemeral: true });
+        }
+        if (priceIndex[newName]) {
+            return interaction.reply({ content: `❌ **${newName.toUpperCase()}** already exists! Choose a different name.`, ephemeral: true });
+        }
+
+        // Copy the old data to the new name, then delete the old name
+        priceIndex[newName] = priceIndex[oldName];
+        delete priceIndex[oldName];
+        fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
+
+        return interaction.reply({ content: `🔄 **Renamed Item:** **${oldName.toUpperCase()}** has been successfully renamed to **${newName.toUpperCase()}**.` });
+    }
+
+    // --- /VOTEPRICE COMMAND ---
     if (interaction.commandName === 'voteprice') {
         const item = interaction.options.getString('item').toLowerCase().trim();
         const newSell = interaction.options.getInteger('sell_price');
