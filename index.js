@@ -18,7 +18,7 @@ const client = new Client({
     ] 
 });
 
-// 👑 Dynamically load the Crown Empire Price Index from the JSON file
+// 👑 Dynamically load the Crown Empire Price Index
 let priceIndex = JSON.parse(fs.readFileSync('./prices.json', 'utf8'));
 
 client.once('ready', async () => {
@@ -38,33 +38,33 @@ client.once('ready', async () => {
         ]
     };
 
-    // 2. The Vote Command
+    // 2. The Vote Command (UPDATED LABELS)
     const voteCommand = {
         name: 'voteprice',
-        description: 'Propose a new base buy and sell price to the server (30 min vote)',
+        description: 'Propose new shop prices to the server (30 min vote)',
         options: [
             {
                 name: 'item',
-                description: 'The item to change (e.g., copper)',
+                description: 'The item to change (e.g., copper ingot)',
                 type: 3,
                 required: true,
             },
             {
-                name: 'new_buy',
-                description: 'The proposed base BUY price',
+                name: 'sell_price',
+                description: 'Price YOU SELL to players (e.g. 200000 for gold)',
                 type: 4, 
                 required: true,
             },
             {
-                name: 'new_sell',
-                description: 'The proposed base SELL price',
+                name: 'buy_price',
+                description: 'Price YOU BUY from players (e.g. 80000 for gold)',
                 type: 4,
                 required: true,
             }
         ]
     };
 
-    // 3. The Admin Force-Change Command
+    // 3. The Admin Force-Change Command (UPDATED LABELS)
     const priceChangeCommand = {
         name: 'pricechange',
         description: 'Forcefully change the price of an item without a vote (Admin only)',
@@ -76,23 +76,23 @@ client.once('ready', async () => {
                 required: true,
             },
             {
-                name: 'new_buy',
-                description: 'The new base BUY price',
+                name: 'sell_price',
+                description: 'Price YOU SELL to players (e.g. 200000)',
                 type: 4,
                 required: true,
             },
             {
-                name: 'new_sell',
-                description: 'The new base SELL price',
+                name: 'buy_price',
+                description: 'Price YOU BUY from players (e.g. 80000)',
                 type: 4,
                 required: true,
             }
         ]
     };
 
-    // Register all commands with Discord
+    // Register all commands
     await client.application.commands.set([priceCommand, voteCommand, priceChangeCommand]);
-    console.log('✅ Slash commands /price, /voteprice, and /pricechange successfully registered!');
+    console.log('✅ Slash commands successfully registered!');
 });
 
 client.on('interactionCreate', async interaction => {
@@ -103,28 +103,29 @@ client.on('interactionCreate', async interaction => {
         const item = interaction.options.getString('item').toLowerCase().trim();
 
         if (priceIndex[item]) {
-            const baseBuy = priceIndex[item].buy;
-            const baseSell = priceIndex[item].sell;
+            // Read legacy JSON format but flip variables to match owner's perspective
+            const ownerSellPrice = priceIndex[item].buy; 
+            const ownerBuyPrice = priceIndex[item].sell;
             
-            const minBuy = Math.floor(baseBuy * 0.90);
-            const maxBuy = Math.ceil(baseBuy * 1.10);
-            const minSell = Math.floor(baseSell * 0.90);
-            const maxSell = Math.ceil(baseSell * 1.10);
+            const minSell = Math.floor(ownerSellPrice * 0.90);
+            const maxSell = Math.ceil(ownerSellPrice * 1.10);
+            const minBuy = Math.floor(ownerBuyPrice * 0.90);
+            const maxBuy = Math.ceil(ownerBuyPrice * 1.10);
 
             await interaction.reply(
                 `**${item.toUpperCase()}**\n` +
-                `**🟢 SELLING**\n> Base Buy: **${baseBuy}**\n> 10% Range: **${minBuy}** - **${maxBuy}**\n\n` +
-                `**🔴 BUYING**\n> Base Sell: **${baseSell}**\n> 10% Range: **${minSell}** - **${maxSell}**`
+                `**🟢 SELLING (You sell to players)**\n> Base Price: **${ownerSellPrice}**\n> 10% Range: **${minSell}** - **${maxSell}**\n\n` +
+                `**🔴 BUYING (You buy from players)**\n> Base Price: **${ownerBuyPrice}**\n> 10% Range: **${minBuy}** - **${maxBuy}**`
             );
         } else {
-            await interaction.reply(`The Crown Empire has not set official buy/sell prices for "${item}" yet.`);
+            await interaction.reply(`The Crown Empire has not set official prices for "${item}" yet.`);
         }
     }
 
     // --- /PRICECHANGE COMMAND LOGIC (ADMIN OVERRIDE) ---
     if (interaction.commandName === 'pricechange') {
         // 👇 PASTE YOUR AUTHORIZED ROLE ID HERE INSIDE THE QUOTES 👇
-        const requiredRoleId = '1533611128284909608'; 
+        const requiredRoleId = 'YOUR_ROLE_ID_HERE'; 
 
         if (!interaction.member.roles.cache.has(requiredRoleId)) {
             return interaction.reply({ 
@@ -134,23 +135,23 @@ client.on('interactionCreate', async interaction => {
         }
 
         const item = interaction.options.getString('item').toLowerCase().trim();
-        const newBuy = interaction.options.getInteger('new_buy');
-        const newSell = interaction.options.getInteger('new_sell');
+        const newSell = interaction.options.getInteger('sell_price');
+        const newBuy = interaction.options.getInteger('buy_price');
 
-        // Update memory and save permanently to file
-        priceIndex[item] = { buy: newBuy, sell: newSell };
+        // Save backwards to perfectly match the Vending Machine JSON structure
+        priceIndex[item] = { buy: newSell, sell: newBuy };
         fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
 
         return interaction.reply({ 
-            content: `👑 **Admin Override:** The official base prices for **${item.toUpperCase()}** have been instantly updated to Buy: **${newBuy}** | Sell: **${newSell}**.` 
+            content: `👑 **Admin Override:** The official prices for **${item.toUpperCase()}** have been instantly updated to **Selling:** ${newSell} | **Buying:** ${newBuy}.` 
         });
     }
 
     // --- /VOTEPRICE COMMAND LOGIC ---
     if (interaction.commandName === 'voteprice') {
         const item = interaction.options.getString('item').toLowerCase().trim();
-        const newBuy = interaction.options.getInteger('new_buy');
-        const newSell = interaction.options.getInteger('new_sell');
+        const newSell = interaction.options.getInteger('sell_price');
+        const newBuy = interaction.options.getInteger('buy_price');
 
         const totalMembers = interaction.guild.memberCount;
         const requiredVotes = Math.ceil(totalMembers / 2);
@@ -165,7 +166,7 @@ client.on('interactionCreate', async interaction => {
         const responseMessage = await interaction.reply({
             content: `📢 **PRICE CHANGE PROPOSAL** 📢\n` +
                      `**Item:** ${item.toUpperCase()}\n` +
-                     `**Proposed Buy:** ${newBuy} | **Proposed Sell:** ${newSell}\n\n` +
+                     `**Proposed Selling Price:** ${newSell} | **Proposed Buying Price:** ${newBuy}\n\n` +
                      `*Requires **${requiredVotes}** votes (50% of server) to pass.*\n` +
                      `⏳ *Time remaining: 30 minutes.*`,
             components: [row],
@@ -187,17 +188,18 @@ client.on('interactionCreate', async interaction => {
                 await interaction.editReply({
                     content: `📢 **PRICE CHANGE PROPOSAL** 📢\n` +
                              `**Item:** ${item.toUpperCase()}\n` +
-                             `**Proposed Buy:** ${newBuy} | **Proposed Sell:** ${newSell}\n\n` +
+                             `**Proposed Selling Price:** ${newSell} | **Proposed Buying Price:** ${newBuy}\n\n` +
                              `*Requires **${requiredVotes}** votes (50% of server) to pass.*\n` +
                              `✅ **Current Votes:** ${votedUsers.size} / ${requiredVotes}\n` +
                              `⏳ *Time remaining: 30 minutes.*`
                 });
 
                 if (votedUsers.size >= requiredVotes) {
-                    priceIndex[item] = { buy: newBuy, sell: newSell };
+                    // Save backwards to perfectly match the Vending Machine JSON structure
+                    priceIndex[item] = { buy: newSell, sell: newBuy };
                     fs.writeFileSync('./prices.json', JSON.stringify(priceIndex, null, 4));
                     
-                    await interaction.followUp(`🎉 **VOTE PASSED!** The official Crown Empire base prices for **${item.toUpperCase()}** are now Buy: ${newBuy} | Sell: ${newSell}.`);
+                    await interaction.followUp(`🎉 **VOTE PASSED!** The official Crown Empire prices for **${item.toUpperCase()}** are now **Selling:** ${newSell} | **Buying:** ${newBuy}.`);
                     collector.stop('passed');
                 }
             }
@@ -212,5 +214,17 @@ client.on('interactionCreate', async interaction => {
         });
     }
 });
+
+// --- ANTI-CRASH SYSTEM ---
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+});
+process.on('uncaughtExceptionMonitor', (err, origin) => {
+    console.error('Uncaught Exception Monitor:', err, origin);
+});
+// -------------------------
 
 client.login(process.env.TOKEN);
