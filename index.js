@@ -190,7 +190,8 @@ client.on('interactionCreate', async interaction => {
     const hasRole = interaction.member && interaction.member.roles && interaction.member.roles.cache.has(ADMIN_ROLE_ID);
     const isAdmin = hasRole || interaction.user.id === ADMIN_USER_ID;
 
-    // --- /PRICE COMMAND ---
+    
+   // --- /PRICE COMMAND ---
     if (interaction.commandName === 'price') {
         const itemName = interaction.options.getString('item').toLowerCase().trim();
         
@@ -198,13 +199,21 @@ client.on('interactionCreate', async interaction => {
         const itemData = await Item.findOne({ name: itemName });
 
         if (itemData) {
+            // 🧮 CALCULATE 7% VENDING TAX
+            // Sell: Minus 7% (multiply by 0.93)
+            const sellAfterTaxes = Math.floor(itemData.ownerSellPrice * 0.93);
+            // Buy: Plus 7% (multiply by 1.07)
+            const buyAfterTaxes = Math.floor(itemData.ownerBuyPrice * 1.07);
+
             const priceEmbed = new EmbedBuilder()
                 .setColor('#8A2BE2') 
                 .setTitle('Price Results')
                 .setDescription(
                     `### ${toTitleCase(itemData.name)}\n\n` +
                     `🟢 **Selling price:** **${formatPrice(itemData.ownerSellPrice)}**\n` +
-                    `🔴 **Buying price:** **${formatPrice(itemData.ownerBuyPrice)}**`
+                    `*(After 7% Vending Tax: ${formatPrice(sellAfterTaxes)})*\n\n` +
+                    `🔴 **Buying price:** **${formatPrice(itemData.ownerBuyPrice)}**\n` +
+                    `*(After 7% Vending Tax: ${formatPrice(buyAfterTaxes)})*`
                 )
                 .setFooter({ text: 'Crown Empire Economy' });
 
