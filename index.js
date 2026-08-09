@@ -477,4 +477,19 @@ process.on('uncaughtExceptionMonitor', (err, origin) => {
 });
 
 // THE MOST IMPORTANT LINE (Tells the bot to log in!)
-client.login(process.env.TOKEN);
+// --- DIAGNOSTIC TRACKER ---
+console.log("🔍 System Check: Looking for Discord Token...");
+
+if (!process.env.TOKEN) {
+    console.log("❌ ERROR: The TOKEN is missing or Render can't read it!");
+} else {
+    console.log("✅ Token found! Attempting to connect to Discord...");
+    
+    client.login(process.env.TOKEN)
+        .then(() => {
+            console.log("✅ Connection request accepted by Discord!");
+        })
+        .catch(err => {
+            console.error("❌ DISCORD REJECTED THE LOGIN:", err);
+        });
+}
