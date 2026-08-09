@@ -477,6 +477,7 @@ process.on('uncaughtExceptionMonitor', (err, origin) => {
 });
 
 // THE MOST IMPORTANT LINE (Tells the bot to log in!)
+
 // --- DIAGNOSTIC TRACKER ---
 console.log("🔍 System Check: Looking for Discord Token...");
 
@@ -484,6 +485,9 @@ if (!process.env.TOKEN) {
     console.log("❌ ERROR: The TOKEN is missing or Render can't read it!");
 } else {
     console.log("✅ Token found! Attempting to connect to Discord...");
+    
+    // 👇 NEW: TURN ON DISCORD'S SECRET INTERNAL LOGS 👇
+    client.on('debug', console.log);
     
     client.login(process.env.TOKEN)
         .then(() => {
