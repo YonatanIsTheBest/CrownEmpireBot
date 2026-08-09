@@ -1,4 +1,3 @@
-// 👇 THE NETWORK FIX (Forces IPv4 to prevent the gateway hang) 👇
 const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
 
@@ -150,16 +149,16 @@ client.on('interactionCreate', async interaction => {
     const hasRole = interaction.member && interaction.member.roles && interaction.member.roles.cache.has(ADMIN_ROLE_ID);
     const isAdmin = hasRole || interaction.user.id === ADMIN_USER_ID;
 
-   // ✨ GLOBAL UI ASSETS ✨
+    // ✨ GLOBAL UI ASSETS ✨
     const crownIcon = client.user.displayAvatarURL(); 
     const errorIcon = 'https://cdn-icons-png.flaticon.com/512/4201/4201973.png';
     const royalGold = '#FFB700';
-    const MARKET_CHANNEL_ID = '1536121142908293180'; // 📢 The channel where updates will be sent
+    const MARKET_CHANNEL_ID = '1536121142908293180'; // 📢 Market Ticker Channel
 
-    // 📢 HELPER FUNCTION: Sends an embed to the update channel
+    // 📢 HELPER FUNCTION: Broadcasts price updates to the channel
     async function sendMarketAlert(itemName, newSell, newBuy, isVote = false) {
         const channel = await client.channels.fetch(MARKET_CHANNEL_ID).catch(() => null);
-        if (!channel) return; // If the bot can't find the channel, just ignore it
+        if (!channel) return; 
 
         const alertEmbed = new EmbedBuilder()
             .setColor(isVote ? '#2ECC71' : royalGold)
@@ -237,7 +236,7 @@ client.on('interactionCreate', async interaction => {
             .setTimestamp();
             
         await interaction.reply({ embeds: [adminEmbed] });
-        await sendMarketAlert(itemData.name, newSell, newBuy, false); // 📢 Trigger Channel Alert
+        await sendMarketAlert(itemData.name, newSell, newBuy, false);
     }
 
     // --- /ADDITEM COMMAND ---
@@ -263,7 +262,7 @@ client.on('interactionCreate', async interaction => {
             .setTimestamp();
             
         await interaction.reply({ embeds: [addEmbed] });
-        await sendMarketAlert(itemName, newSell, newBuy, false); // 📢 Trigger Channel Alert
+        await sendMarketAlert(itemName, newSell, newBuy, false);
     }
 
     // --- /RENAMEITEM COMMAND ---
@@ -362,7 +361,7 @@ client.on('interactionCreate', async interaction => {
                         .setTimestamp();
                     
                     await interaction.followUp({ embeds: [passedEmbed] });
-                    await sendMarketAlert(itemName, newSell, newBuy, true); // 📢 Trigger Channel Alert
+                    await sendMarketAlert(itemName, newSell, newBuy, true);
                     collector.stop('passed');
                 }
             }
@@ -380,3 +379,18 @@ client.on('interactionCreate', async interaction => {
         });
     }
 });
+
+process.on('unhandledRejection', (reason, promise) => console.error('Unhandled Rejection:', reason));
+process.on('uncaughtException', (err) => console.error('Uncaught Exception:', err));
+
+console.log("🔍 System Check: Looking for Discord Token...");
+if (!process.env.TOKEN) {
+    console.log("❌ ERROR: The TOKEN is missing!");
+} else {
+    console.log("✅ Token found! Attempting to connect to Discord...");
+    client.login(process.env.TOKEN).then(() => {
+        console.log("✅ Connection request accepted by Discord!");
+    }).catch(err => {
+        console.error("❌ DISCORD REJECTED THE LOGIN:", err);
+    });
+}
