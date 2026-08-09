@@ -87,7 +87,7 @@ client.once('ready', async () => {
         await mongoose.connect(process.env.MONGO_URI);
         console.log('✅ Connected to MongoDB Atlas permanently!');
         
-        // Auto-migration: If the database is empty, load prices.json!
+        // Auto-migration
         const count = await Item.countDocuments();
         if (count === 0 && fs.existsSync('./prices.json')) {
             console.log('📦 Database is empty! Migrating items from prices.json...');
@@ -97,7 +97,7 @@ client.once('ready', async () => {
             for (const [itemName, prices] of Object.entries(priceIndex)) {
                 itemsToInsert.push({
                     name: itemName,
-                    ownerSellPrice: prices.buy, // Legacy mapping from the JSON file
+                    ownerSellPrice: prices.buy, 
                     ownerBuyPrice: prices.sell
                 });
             }
@@ -168,11 +168,9 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
     
-    // 🧠 AUTOCOMPLETE LOGIC (Reads directly from MongoDB)
+    // 🧠 AUTOCOMPLETE LOGIC
     if (interaction.isAutocomplete()) {
         const focusedValue = interaction.options.getFocused().toLowerCase();
-        
-        // Find top 25 items matching the search
         const choices = await Item.find({ name: new RegExp(focusedValue, 'i') }).limit(25);
         
         const respondChoices = choices.map(choice => ({
@@ -186,23 +184,20 @@ client.on('interactionCreate', async interaction => {
 
     if (!interaction.isChatInputCommand()) return;
 
-    // 🛡️ Bulletproof Admin Check
+    // 🛡️ Admin Check
     const hasRole = interaction.member && interaction.member.roles && interaction.member.roles.cache.has(ADMIN_ROLE_ID);
     const isAdmin = hasRole || interaction.user.id === ADMIN_USER_ID;
 
-    
-   // --- /PRICE COMMAND ---
+    // --- /PRICE COMMAND ---
     if (interaction.commandName === 'price') {
         const itemName = interaction.options.getString('item').toLowerCase().trim();
         
-        // 1. First, try to find the exact item they typed
+        // 1. First, try to find the exact item
         const itemData = await Item.findOne({ name: itemName });
 
         if (itemData) {
             // 🧮 CALCULATE 7% VENDING TAX
-            // Sell: Minus 7% (multiply by 0.93)
             const sellAfterTaxes = Math.floor(itemData.ownerSellPrice * 0.93);
-            // Buy: Plus 7% (multiply by 1.07)
             const buyAfterTaxes = Math.floor(itemData.ownerBuyPrice * 1.07);
 
             const priceEmbed = new EmbedBuilder()
@@ -219,15 +214,14 @@ client.on('interactionCreate', async interaction => {
 
             await interaction.reply({ embeds: [priceEmbed] });
         } else {
-            // 2. If exact match fails, search for ANYTHING containing those words!
+            // 2. SMART SEARCH: Find ANY matching items
             const partialMatches = await Item.find({ name: new RegExp(itemName, 'i') }).limit(10);
             
             if (partialMatches.length > 0) {
-                // We found similar items! Let's list them out.
                 const suggestionList = partialMatches.map(i => `• **${toTitleCase(i.name)}**`).join('\n');
                 
                 const searchEmbed = new EmbedBuilder()
-                    .setColor('#FF9900') // Orange warning color
+                    .setColor('#FF9900') 
                     .setTitle('🔍 Multiple Items Found')
                     .setDescription(
                         `We couldn't find an exact match for **"${toTitleCase(itemName)}"**, but we found these similar items in the database:\n\n` +
@@ -237,9 +231,8 @@ client.on('interactionCreate', async interaction => {
                 
                 await interaction.reply({ embeds: [searchEmbed], ephemeral: true });
             } else {
-                // Absolutely nothing matched
                 const notFoundEmbed = new EmbedBuilder()
-                    .setColor('#FF4D4D') // Red error color
+                    .setColor('#FF4D4D') 
                     .setDescription(`❌ The Crown Empire has not set official prices for **"${toTitleCase(itemName)}"** yet.`);
                 
                 await interaction.reply({ embeds: [notFoundEmbed], ephemeral: true });
@@ -433,8 +426,6 @@ client.on('interactionCreate', async interaction => {
                 await interaction.editReply({ embeds: [updatedVoteEmbed] });
 
                 if (votedUsers.size >= requiredVotes) {
-                    
-                    // Update or create the item in MongoDB
                     const existingItem = await Item.findOne({ name: itemName });
                     if (existingItem) {
                         existingItem.ownerSellPrice = newSell;
@@ -485,4 +476,5 @@ process.on('uncaughtExceptionMonitor', (err, origin) => {
     console.error('Uncaught Exception Monitor:', err, origin);
 });
 
+// THE MOST IMPORTANT LINE (Tells the bot to log in!)
 client.login(process.env.TOKEN);
