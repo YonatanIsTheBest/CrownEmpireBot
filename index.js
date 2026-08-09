@@ -150,8 +150,8 @@ client.on('interactionCreate', async interaction => {
     const hasRole = interaction.member && interaction.member.roles && interaction.member.roles.cache.has(ADMIN_ROLE_ID);
     const isAdmin = hasRole || interaction.user.id === ADMIN_USER_ID;
 
-    // ✨ GLOBAL UI ASSETS ✨
-    const crownIcon = 'https://cdn-icons-png.flaticon.com/512/2550/2550207.png';
+   // ✨ GLOBAL UI ASSETS ✨
+    const crownIcon = client.user.displayAvatarURL(); 
     const errorIcon = 'https://cdn-icons-png.flaticon.com/512/4201/4201973.png';
     const royalGold = '#FFB700';
 
