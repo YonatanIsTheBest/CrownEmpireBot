@@ -230,7 +230,7 @@ client.on('interactionCreate', async interaction => {
         const newBuy = parsePrice(interaction.options.getString('buy_price'));
 
         if (newSell === null || newBuy === null) return interaction.reply({ content: '❌ Invalid price format!', ephemeral: true });
-        const itemData = await Item.findOneAndUpdate({ name: itemName }, { ownerSellPrice: newSell, ownerBuyPrice: newBuy }, { new: true });
+        const itemData = await Item.findOneAndUpdate({ name: itemName }, { ownerSellPrice: newSell, ownerBuyPrice: newBuy }, { returnDocument: 'after'});
         if (!itemData) return interaction.reply({ content: `❌ Item not found. Use \`/additem\`.`, ephemeral: true });
 
         const adminEmbed = new EmbedBuilder()
