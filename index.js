@@ -1,4 +1,3 @@
-// 👇 THE NETWORK FIX (Forces IPv4 to prevent the gateway hang) 👇
 const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
 
@@ -150,10 +149,37 @@ client.on('interactionCreate', async interaction => {
     const hasRole = interaction.member && interaction.member.roles && interaction.member.roles.cache.has(ADMIN_ROLE_ID);
     const isAdmin = hasRole || interaction.user.id === ADMIN_USER_ID;
 
-   // ✨ GLOBAL UI ASSETS ✨
+    // ✨ GLOBAL UI ASSETS ✨
     const crownIcon = client.user.displayAvatarURL(); 
     const errorIcon = 'https://cdn-icons-png.flaticon.com/512/4201/4201973.png';
     const royalGold = '#FFB700';
+    const MARKET_CHANNEL_ID = '1536121142908293180'; 
+
+    // 📢 HELPER FUNCTION: Smart broadcaster with built-in Error Alarm
+    async function sendMarketAlert(itemName, newSell, newBuy, isVote = false, commandInteraction) {
+        try {
+            const channel = await client.channels.fetch(MARKET_CHANNEL_ID);
+            if (!channel) {
+                await commandInteraction.followUp({ content: `⚠️ **Error:** I cannot see the market channel (<#${MARKET_CHANNEL_ID}>)! Check my permissions.`, ephemeral: true });
+                return; 
+            }
+
+            const alertEmbed = new EmbedBuilder()
+                .setColor(isVote ? '#2ECC71' : royalGold)
+                .setAuthor({ name: isVote ? 'Community Market Update' : 'Official Market Update', iconURL: crownIcon })
+                .setTitle(`📈 ${toTitleCase(itemName)}`)
+                .addFields(
+                    { name: 'New Selling Price', value: `\`\`\`${formatPrice(newSell)}\`\`\``, inline: true },
+                    { name: 'New Buying Price', value: `\`\`\`${formatPrice(newBuy)}\`\`\``, inline: true }
+                )
+                .setTimestamp();
+                
+            await channel.send({ embeds: [alertEmbed] });
+        } catch (error) {
+            console.error(error);
+            await commandInteraction.followUp({ content: `⚠️ **Warning:** I tried to send the alert to <#${MARKET_CHANNEL_ID}>, but Discord blocked me! Make sure I have **View Channel**, **Send Messages**, and **Embed Links** permissions enabled in that exact channel.`, ephemeral: true });
+        }
+    }
 
     // --- /PRICE COMMAND ---
     if (interaction.commandName === 'price') {
@@ -169,23 +195,12 @@ client.on('interactionCreate', async interaction => {
                 .setAuthor({ name: 'Crown Empire Official Market', iconURL: crownIcon })
                 .setTitle(`📦 ${toTitleCase(itemData.name)}`)
                 .addFields(
-                    { 
-                        name: '📤 Shop Sells For', 
-                        value: `\`\`\`💰 ${formatPrice(itemData.ownerSellPrice)}\`\`\`> *After Tax:* **${formatPrice(sellAfterTaxes)}**`, 
-                        inline: true 
-                    },
-                    { 
-                        name: '📥 Shop Buys For', 
-                        value: `\`\`\`💰 ${formatPrice(itemData.ownerBuyPrice)}\`\`\`> *After Tax:* **${formatPrice(buyAfterTaxes)}**`, 
-                        inline: true 
-                    }
+                    { name: '📤 Shop Sells For', value: `\`\`\`💰 ${formatPrice(itemData.ownerSellPrice)}\`\`\`> *After Tax:* **${formatPrice(sellAfterTaxes)}**`, inline: true },
+                    { name: '📥 Shop Buys For', value: `\`\`\`💰 ${formatPrice(itemData.ownerBuyPrice)}\`\`\`> *After Tax:* **${formatPrice(buyAfterTaxes)}**`, inline: true }
                 )
                 .setThumbnail(crownIcon)
                 .setTimestamp()
-                .setFooter({ 
-                    text: `Requested by ${interaction.user.username}`, 
-                    iconURL: interaction.user.displayAvatarURL() 
-                });
+                .setFooter({ text: `Requested by ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() });
 
             await interaction.reply({ embeds: [priceEmbed] });
         } else {
@@ -194,16 +209,14 @@ client.on('interactionCreate', async interaction => {
             if (partialMatches.length > 0) {
                 const suggestionList = partialMatches.map(i => `> 🔸 **${toTitleCase(i.name)}**`).join('\n');
                 const searchEmbed = new EmbedBuilder()
-                    .setColor('#2B2D31') // Discord Dark Theme background color
+                    .setColor('#2B2D31')
                     .setAuthor({ name: 'Item Not Found', iconURL: errorIcon })
                     .setDescription(`We couldn't find an exact match for **"${toTitleCase(itemName)}"**.\n\n**Did you mean one of these?**\n${suggestionList}`)
                     .setFooter({ text: '💡 Tip: Click a name from the pop-up menu next time!' });
                 
                 await interaction.reply({ embeds: [searchEmbed], ephemeral: true });
             } else {
-                const notFoundEmbed = new EmbedBuilder()
-                    .setColor('#FF4D4D') 
-                    .setDescription(`❌ The Crown Empire has not set official prices for **"${toTitleCase(itemName)}"** yet.`);
+                const notFoundEmbed = new EmbedBuilder().setColor('#FF4D4D').setDescription(`❌ The Crown Empire has not set official prices for **"${toTitleCase(itemName)}"** yet.`);
                 await interaction.reply({ embeds: [notFoundEmbed], ephemeral: true });
             }
         }
@@ -217,7 +230,10 @@ client.on('interactionCreate', async interaction => {
         const newBuy = parsePrice(interaction.options.getString('buy_price'));
 
         if (newSell === null || newBuy === null) return interaction.reply({ content: '❌ Invalid price format!', ephemeral: true });
-        const itemData = await Item.findOneAndUpdate({ name: itemName }, { ownerSellPrice: newSell, ownerBuyPrice: newBuy }, { new: true });
+        
+        // 👇 THIS IS THE LINE THAT WAS FIXED 👇
+        const itemData = await Item.findOneAndUpdate({ name: itemName }, { ownerSellPrice: newSell, ownerBuyPrice: newBuy }, { returnDocument: 'after' });
+        
         if (!itemData) return interaction.reply({ content: `❌ Item not found. Use \`/additem\`.`, ephemeral: true });
 
         const adminEmbed = new EmbedBuilder()
@@ -230,7 +246,8 @@ client.on('interactionCreate', async interaction => {
             )
             .setTimestamp();
             
-        return interaction.reply({ embeds: [adminEmbed] });
+        await interaction.reply({ embeds: [adminEmbed] });
+        await sendMarketAlert(itemData.name, newSell, newBuy, false, interaction);
     }
 
     // --- /ADDITEM COMMAND ---
@@ -255,7 +272,8 @@ client.on('interactionCreate', async interaction => {
             )
             .setTimestamp();
             
-        return interaction.reply({ embeds: [addEmbed] });
+        await interaction.reply({ embeds: [addEmbed] });
+        await sendMarketAlert(itemName, newSell, newBuy, false, interaction);
     }
 
     // --- /RENAMEITEM COMMAND ---
@@ -354,6 +372,7 @@ client.on('interactionCreate', async interaction => {
                         .setTimestamp();
                     
                     await interaction.followUp({ embeds: [passedEmbed] });
+                    await sendMarketAlert(itemName, newSell, newBuy, true, interaction);
                     collector.stop('passed');
                 }
             }
