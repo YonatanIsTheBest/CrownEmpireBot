@@ -153,24 +153,32 @@ client.on('interactionCreate', async interaction => {
     const crownIcon = client.user.displayAvatarURL(); 
     const errorIcon = 'https://cdn-icons-png.flaticon.com/512/4201/4201973.png';
     const royalGold = '#FFB700';
-    const MARKET_CHANNEL_ID = '1536121142908293180'; // 📢 Market Ticker Channel
+    const MARKET_CHANNEL_ID = '1536121142908293180'; 
 
-    // 📢 HELPER FUNCTION: Broadcasts price updates to the channel
-    async function sendMarketAlert(itemName, newSell, newBuy, isVote = false) {
-        const channel = await client.channels.fetch(MARKET_CHANNEL_ID).catch(() => null);
-        if (!channel) return; 
+    // 📢 HELPER FUNCTION: Smart broadcaster with built-in Error Alarm
+    async function sendMarketAlert(itemName, newSell, newBuy, isVote = false, commandInteraction) {
+        try {
+            const channel = await client.channels.fetch(MARKET_CHANNEL_ID);
+            if (!channel) {
+                await commandInteraction.followUp({ content: `⚠️ **Error:** I cannot see the market channel (<#${MARKET_CHANNEL_ID}>)! Check my permissions.`, ephemeral: true });
+                return; 
+            }
 
-        const alertEmbed = new EmbedBuilder()
-            .setColor(isVote ? '#2ECC71' : royalGold)
-            .setAuthor({ name: isVote ? 'Community Market Update' : 'Official Market Update', iconURL: crownIcon })
-            .setTitle(`📈 ${toTitleCase(itemName)}`)
-            .addFields(
-                { name: 'New Selling Price', value: `\`\`\`${formatPrice(newSell)}\`\`\``, inline: true },
-                { name: 'New Buying Price', value: `\`\`\`${formatPrice(newBuy)}\`\`\``, inline: true }
-            )
-            .setTimestamp();
-            
-        await channel.send({ embeds: [alertEmbed] });
+            const alertEmbed = new EmbedBuilder()
+                .setColor(isVote ? '#2ECC71' : royalGold)
+                .setAuthor({ name: isVote ? 'Community Market Update' : 'Official Market Update', iconURL: crownIcon })
+                .setTitle(`📈 ${toTitleCase(itemName)}`)
+                .addFields(
+                    { name: 'New Selling Price', value: `\`\`\`${formatPrice(newSell)}\`\`\``, inline: true },
+                    { name: 'New Buying Price', value: `\`\`\`${formatPrice(newBuy)}\`\`\``, inline: true }
+                )
+                .setTimestamp();
+                
+            await channel.send({ embeds: [alertEmbed] });
+        } catch (error) {
+            console.error(error);
+            await commandInteraction.followUp({ content: `⚠️ **Warning:** I tried to send the alert to <#${MARKET_CHANNEL_ID}>, but Discord blocked me! Make sure I have **View Channel**, **Send Messages**, and **Embed Links** permissions enabled in that exact channel.`, ephemeral: true });
+        }
     }
 
     // --- /PRICE COMMAND ---
@@ -236,7 +244,7 @@ client.on('interactionCreate', async interaction => {
             .setTimestamp();
             
         await interaction.reply({ embeds: [adminEmbed] });
-        await sendMarketAlert(itemData.name, newSell, newBuy, false);
+        await sendMarketAlert(itemData.name, newSell, newBuy, false, interaction);
     }
 
     // --- /ADDITEM COMMAND ---
@@ -262,7 +270,7 @@ client.on('interactionCreate', async interaction => {
             .setTimestamp();
             
         await interaction.reply({ embeds: [addEmbed] });
-        await sendMarketAlert(itemName, newSell, newBuy, false);
+        await sendMarketAlert(itemName, newSell, newBuy, false, interaction);
     }
 
     // --- /RENAMEITEM COMMAND ---
@@ -361,7 +369,7 @@ client.on('interactionCreate', async interaction => {
                         .setTimestamp();
                     
                     await interaction.followUp({ embeds: [passedEmbed] });
-                    await sendMarketAlert(itemName, newSell, newBuy, true);
+                    await sendMarketAlert(itemName, newSell, newBuy, true, interaction);
                     collector.stop('passed');
                 }
             }
