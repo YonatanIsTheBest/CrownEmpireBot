@@ -37,7 +37,7 @@ const vouchSchema = new mongoose.Schema({
     giverName: String,
     type: { type: String, required: true }, // 'vouch' or 'scam'
     item: String,
-    quantity: String,
+    details: String, // ✨ Changed from quantity to details
     timestamp: { type: Date, default: Date.now }
 });
 const Vouch = mongoose.model('Vouch', vouchSchema);
@@ -59,7 +59,7 @@ app.get('/vouches/:userId', async (req, res) => {
             <title>Crown Empire | Reputation Profile</title>
             <style>
                 body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1E1F22; color: #DBDEE1; margin: 0; padding: 40px; }
-                .container { max-width: 900px; margin: 0 auto; background: #2B2D31; padding: 30px; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,0.5); }
+                .container { max-width: 1000px; margin: 0 auto; background: #2B2D31; padding: 30px; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,0.5); }
                 h1 { color: #FFB700; border-bottom: 2px solid #FFB700; padding-bottom: 10px; }
                 table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #313338; border-radius: 8px; overflow: hidden; }
                 th, td { padding: 15px; text-align: left; border-bottom: 1px solid #1E1F22; }
@@ -67,6 +67,7 @@ app.get('/vouches/:userId', async (req, res) => {
                 tr:hover { background-color: #383A40; }
                 .badge-vouch { background: rgba(46, 204, 113, 0.2); color: #2ECC71; padding: 5px 10px; border-radius: 4px; font-weight: bold; }
                 .badge-scam { background: rgba(231, 76, 60, 0.2); color: #E74C3C; padding: 5px 10px; border-radius: 4px; font-weight: bold; }
+                .admin-id { font-size: 0.8em; color: #80848E; font-family: monospace; }
             </style>
         </head>
         <body>
@@ -75,13 +76,14 @@ app.get('/vouches/:userId', async (req, res) => {
                 <p>Displaying records for Discord ID: <strong>${req.params.userId}</strong></p>
                 ${vouches.length === 0 ? '<p><i>No trade records found for this user.</i></p>' : `
                 <table>
-                    <tr><th>Date</th><th>Report Type</th><th>Item Traded</th><th>Quantity</th><th>Reporter</th></tr>
+                    <tr><th>Vouch ID (For Admins)</th><th>Date</th><th>Type</th><th>Item Traded</th><th>Details</th><th>Reporter</th></tr>
                     ${vouches.map(v => `
                     <tr>
+                        <td class="admin-id">${v._id}</td>
                         <td>${v.timestamp.toLocaleDateString()}</td>
                         <td><span class="${v.type === 'vouch' ? 'badge-vouch' : 'badge-scam'}">${v.type === 'vouch' ? '✅ Vouch' : '🚨 Scam'}</span></td>
                         <td>${v.item}</td>
-                        <td>${v.quantity}</td>
+                        <td>${v.details}</td>
                         <td>${v.giverName}</td>
                     </tr>
                     `).join('')}
@@ -145,7 +147,13 @@ client.once('ready', async () => {
                 { name: 'user', description: 'The user you traded with', type: 6, required: true },
                 { name: 'type', description: 'Was it a legit trade or a scam?', type: 3, required: true, choices: [{name:'✅ Legit Vouch', value:'vouch'}, {name:'🚨 Scam Report', value:'scam'}] },
                 { name: 'item', description: 'What item was traded?', type: 3, required: true },
-                { name: 'quantity', description: 'How many items? (e.g., 500k, 2 stacks)', type: 3, required: true }
+                { name: 'details', description: 'Details of the trade (e.g. 500k, 2 stacks, specific agreements)', type: 3, required: true }
+            ] 
+        },
+        { 
+            name: 'removevouch', description: 'Remove a specific vouch from a user (Admin)', 
+            options: [
+                { name: 'vouch_id', description: 'The exact Vouch ID (Copy this from the web portal)', type: 3, required: true }
             ] 
         },
         { name: 'vouchban', description: 'Ban an abuser and wipe all their given vouches (Admin)', options: [{ name: 'user', description: 'The abuser to ban', type: 6, required: true }] }
@@ -188,7 +196,7 @@ client.on('interactionCreate', async interaction => {
         const targetUser = interaction.options.getUser('user');
         const type = interaction.options.getString('type');
         const item = interaction.options.getString('item');
-        const quantity = interaction.options.getString('quantity');
+        const details = interaction.options.getString('details');
         
         // Anti-Abuse 1: Check if banned
         const isBanned = await VouchBan.findOne({ userId: interaction.user.id });
@@ -204,10 +212,10 @@ client.on('interactionCreate', async interaction => {
             return interaction.reply({ content: '⏳ Your account must be in the server for at least 3 days to submit reports.', ephemeral: true });
         }
 
-        // Anti-Abuse 4: Cooldown (1 hour per user)
+        // Anti-Abuse 4: Cooldown (15 minutes per user)
         const cooldownKey = interaction.user.id;
         if (vouchCooldowns.has(cooldownKey)) {
-            const expiration = vouchCooldowns.get(cooldownKey) + (1000 * 60 * 15); // 1 hour
+            const expiration = vouchCooldowns.get(cooldownKey) + (1000 * 60 * 15); // 15 minutes
             if (Date.now() < expiration) {
                 const timeLeft = Math.round((expiration - Date.now()) / 60000);
                 return interaction.reply({ content: `⏳ Please wait **${timeLeft} minutes** before submitting another vouch.`, ephemeral: true });
@@ -220,7 +228,7 @@ client.on('interactionCreate', async interaction => {
             giverName: interaction.user.username,
             type: type,
             item: item,
-            quantity: quantity
+            details: details
         });
 
         vouchCooldowns.set(cooldownKey, Date.now()); // Start cooldown
@@ -228,7 +236,7 @@ client.on('interactionCreate', async interaction => {
         const replyEmbed = new EmbedBuilder()
             .setColor(type === 'vouch' ? '#2ECC71' : '#E74C3C')
             .setAuthor({ name: 'Trade Report Submitted', iconURL: crownIcon })
-            .setDescription(`Successfully recorded a **${type.toUpperCase()}** for <@${targetUser.id}>.\n\n**Item:** ${item}\n**Quantity:** ${quantity}`)
+            .setDescription(`Successfully recorded a **${type.toUpperCase()}** for <@${targetUser.id}>.\n\n**Item:** ${item}\n**Details:** ${details}`)
             .setTimestamp();
 
         return interaction.reply({ embeds: [replyEmbed] });
@@ -254,10 +262,30 @@ client.on('interactionCreate', async interaction => {
                 { name: '🚨 Scam Reports', value: `\`\`\`${totalScams}\`\`\``, inline: true },
                 { name: '📤 Vouches Given', value: `\`\`\`${given}\`\`\``, inline: true }
             )
-            .setDescription(`**[📋 Click here to view their complete Trade Ledger](${portalLink})**\n*Opens a detailed table of every trade, item, and quantity.*`)
+            .setDescription(`**[📋 Click here to view their complete Trade Ledger](${portalLink})**\n*Opens a detailed table of every trade, item, and details.*`)
             .setTimestamp();
 
         return interaction.reply({ embeds: [statsEmbed] });
+    }
+
+    if (interaction.commandName === 'removevouch') {
+        if (!isAdmin) return interaction.reply({ content: '❌ You do not have permission.', ephemeral: true });
+        const vouchId = interaction.options.getString('vouch_id').trim();
+
+        try {
+            const deletedVouch = await Vouch.findByIdAndDelete(vouchId);
+            
+            if (!deletedVouch) return interaction.reply({ content: `❌ Could not find a vouch with ID **${vouchId}**. Please copy the exact ID from the web portal.`, ephemeral: true });
+
+            const removeEmbed = new EmbedBuilder()
+                .setColor('#E74C3C')
+                .setAuthor({ name: 'Vouch Removed (Admin)', iconURL: crownIcon })
+                .setDescription(`Successfully deleted a **${deletedVouch.type.toUpperCase()}** report.\n\n**Removed from:** <@${deletedVouch.receiverId}>\n**Originally given by:** ${deletedVouch.giverName}`);
+                
+            return interaction.reply({ embeds: [removeEmbed] });
+        } catch (err) {
+            return interaction.reply({ content: `❌ Invalid ID format. Make sure you are copying the long ID from the far-left column of the web portal.`, ephemeral: true });
+        }
     }
 
     if (interaction.commandName === 'vouchban') {
@@ -270,7 +298,7 @@ client.on('interactionCreate', async interaction => {
         const deleteResult = await Vouch.deleteMany({ giverId: targetUser.id });
 
         const banEmbed = new EmbedBuilder()
-            .setColor('#992D22') // Dark red
+            .setColor('#992D22') 
             .setTitle('🔨 Reputation System Ban')
             .setDescription(`<@${targetUser.id}> has been permanently blacklisted from the vouch system.`)
             .addFields({ name: 'Purge Complete', value: `Deleted **${deleteResult.deletedCount}** fake/abusive vouches they had previously given.` });
