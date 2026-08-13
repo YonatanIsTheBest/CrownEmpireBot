@@ -5,9 +5,6 @@ const express = require('express');
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.get('/', (req, res) => res.send('Bot is alive!'));
-app.listen(port, () => console.log(`Web server listening on port ${port}`));
-
 require('dotenv').config();
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
 const fs = require('fs');
@@ -26,7 +23,7 @@ const client = new Client({
     ] 
 });
 
-// --- MONGODB SCHEMA ---
+// --- MONGODB SCHEMAS ---
 const itemSchema = new mongoose.Schema({
     name: { type: String, required: true, unique: true },
     ownerSellPrice: { type: Number, required: true },
@@ -34,10 +31,74 @@ const itemSchema = new mongoose.Schema({
 });
 const Item = mongoose.model('Item', itemSchema);
 
-function toTitleCase(str) {
-    return str.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
-}
+const vouchSchema = new mongoose.Schema({
+    receiverId: { type: String, required: true },
+    giverId: { type: String, required: true },
+    giverName: String,
+    type: { type: String, required: true }, // 'vouch' or 'scam'
+    item: String,
+    quantity: String,
+    timestamp: { type: Date, default: Date.now }
+});
+const Vouch = mongoose.model('Vouch', vouchSchema);
 
+const banSchema = new mongoose.Schema({ userId: { type: String, required: true, unique: true } });
+const VouchBan = mongoose.model('VouchBan', banSchema);
+
+// --- EXPRESS WEB SERVER (VOUCH PORTAL) ---
+app.get('/', (req, res) => res.send('Bot is alive!'));
+
+app.get('/vouches/:userId', async (req, res) => {
+    try {
+        const vouches = await Vouch.find({ receiverId: req.params.userId }).sort({ timestamp: -1 });
+        
+        let html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Crown Empire | Reputation Profile</title>
+            <style>
+                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1E1F22; color: #DBDEE1; margin: 0; padding: 40px; }
+                .container { max-width: 900px; margin: 0 auto; background: #2B2D31; padding: 30px; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,0.5); }
+                h1 { color: #FFB700; border-bottom: 2px solid #FFB700; padding-bottom: 10px; }
+                table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #313338; border-radius: 8px; overflow: hidden; }
+                th, td { padding: 15px; text-align: left; border-bottom: 1px solid #1E1F22; }
+                th { background-color: #111214; color: #FFB700; font-weight: bold; }
+                tr:hover { background-color: #383A40; }
+                .badge-vouch { background: rgba(46, 204, 113, 0.2); color: #2ECC71; padding: 5px 10px; border-radius: 4px; font-weight: bold; }
+                .badge-scam { background: rgba(231, 76, 60, 0.2); color: #E74C3C; padding: 5px 10px; border-radius: 4px; font-weight: bold; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>📜 Public Trade Ledger</h1>
+                <p>Displaying records for Discord ID: <strong>${req.params.userId}</strong></p>
+                ${vouches.length === 0 ? '<p><i>No trade records found for this user.</i></p>' : `
+                <table>
+                    <tr><th>Date</th><th>Report Type</th><th>Item Traded</th><th>Quantity</th><th>Reporter</th></tr>
+                    ${vouches.map(v => `
+                    <tr>
+                        <td>${v.timestamp.toLocaleDateString()}</td>
+                        <td><span class="${v.type === 'vouch' ? 'badge-vouch' : 'badge-scam'}">${v.type === 'vouch' ? '✅ Vouch' : '🚨 Scam'}</span></td>
+                        <td>${v.item}</td>
+                        <td>${v.quantity}</td>
+                        <td>${v.giverName}</td>
+                    </tr>
+                    `).join('')}
+                </table>`}
+            </div>
+        </body>
+        </html>`;
+        res.send(html);
+    } catch (err) {
+        res.status(500).send("Error loading reputation data.");
+    }
+});
+
+app.listen(port, () => console.log(`Web server listening on port ${port}`));
+
+// --- HELPER FUNCTIONS ---
+function toTitleCase(str) { return str.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' '); }
 function formatPrice(num) {
     if (num === 0) return "0";
     if (num >= 1000000000000) return parseFloat((num / 1000000000000).toFixed(2)) + 'T';
@@ -46,101 +107,59 @@ function formatPrice(num) {
     if (num >= 1000) return parseFloat((num / 1000).toFixed(2)) + 'k';
     return num.toLocaleString(); 
 }
-
 function parsePrice(input) {
     if (!input) return null;
     const cleanInput = input.toString().trim().toUpperCase();
-    
-    let multiplier = 1;
-    let numberPart = cleanInput;
-
+    let multiplier = 1, numberPart = cleanInput;
     if (cleanInput.endsWith('T')) { multiplier = 1000000000000; numberPart = cleanInput.slice(0, -1); }
     else if (cleanInput.endsWith('B')) { multiplier = 1000000000; numberPart = cleanInput.slice(0, -1); }
     else if (cleanInput.endsWith('M')) { multiplier = 1000000; numberPart = cleanInput.slice(0, -1); }
     else if (cleanInput.endsWith('K')) { multiplier = 1000; numberPart = cleanInput.slice(0, -1); }
-
     const number = parseFloat(numberPart);
     if (isNaN(number)) return null;
     return Math.floor(number * multiplier);
 }
 
+const vouchCooldowns = new Map(); // Anti-spam memory
+
 client.once('ready', async () => {
     console.log('👑 Crown Empire Bot is starting up...');
-
     try {
         await mongoose.connect(process.env.MONGO_URI);
         console.log('✅ Connected to MongoDB Atlas permanently!');
+    } catch (err) { console.error('❌ MongoDB Connection Error:', err); }
+
+    const commands = [
+        { name: 'price', description: 'Check official prices', options: [{ name: 'item', description: 'Item name', type: 3, required: true, autocomplete: true }] },
+        { name: 'voteprice', description: 'Propose new shop prices', options: [{ name: 'item', description: 'Item', type: 3, required: true, autocomplete: true }, { name: 'sell_price', description: 'Sell', type: 3, required: true }, { name: 'buy_price', description: 'Buy', type: 3, required: true }] },
+        { name: 'pricechange', description: 'Force price change (Admin)', options: [{ name: 'item', description: 'Item', type: 3, required: true, autocomplete: true }, { name: 'sell_price', description: 'Sell', type: 3, required: true }, { name: 'buy_price', description: 'Buy', type: 3, required: true }] },
+        { name: 'additem', description: 'Insert new item (Admin)', options: [{ name: 'item', description: 'Item', type: 3, required: true }, { name: 'sell_price', description: 'Sell', type: 3, required: true }, { name: 'buy_price', description: 'Buy', type: 3, required: true }] },
+        { name: 'renameitem', description: 'Rename item (Admin)', options: [{ name: 'old_name', description: 'Old', type: 3, required: true, autocomplete: true }, { name: 'new_name', description: 'New', type: 3, required: true }] },
+        { name: 'removeitem', description: 'Remove item (Admin)', options: [{ name: 'item', description: 'Item', type: 3, required: true, autocomplete: true }] },
         
-        const count = await Item.countDocuments();
-        if (count === 0 && fs.existsSync('./prices.json')) {
-            console.log('📦 Database is empty! Migrating items from prices.json...');
-            const priceIndex = JSON.parse(fs.readFileSync('./prices.json', 'utf8'));
-            
-            const itemsToInsert = [];
-            for (const [itemName, prices] of Object.entries(priceIndex)) {
-                itemsToInsert.push({ name: itemName, ownerSellPrice: prices.buy, ownerBuyPrice: prices.sell });
-            }
-            
-            await Item.insertMany(itemsToInsert);
-            console.log(`✅ Successfully migrated ${itemsToInsert.length} items to MongoDB cloud!`);
-        }
-    } catch (err) {
-        console.error('❌ MongoDB Connection Error:', err);
-    }
+        // ✨ NEW VOUCH COMMANDS ✨
+        { name: 'vouch', description: 'Check a user\'s reputation and trade history', options: [{ name: 'user', description: 'The user to investigate', type: 6, required: true }] },
+        { 
+            name: 'givevouch', description: 'Submit a formal trade report (Vouch or Scam)', 
+            options: [
+                { name: 'user', description: 'The user you traded with', type: 6, required: true },
+                { name: 'type', description: 'Was it a legit trade or a scam?', type: 3, required: true, choices: [{name:'✅ Legit Vouch', value:'vouch'}, {name:'🚨 Scam Report', value:'scam'}] },
+                { name: 'item', description: 'What item was traded?', type: 3, required: true },
+                { name: 'quantity', description: 'How many items? (e.g., 500k, 2 stacks)', type: 3, required: true }
+            ] 
+        },
+        { name: 'vouchban', description: 'Ban an abuser and wipe all their given vouches (Admin)', options: [{ name: 'user', description: 'The abuser to ban', type: 6, required: true }] }
+    ];
 
-    const priceCommand = {
-        name: 'price', description: 'Check official Crown Empire shop prices for an item',
-        options: [{ name: 'item', description: 'The item you want to check', type: 3, required: true, autocomplete: true }]
-    };
-    const voteCommand = {
-        name: 'voteprice', description: 'Propose new shop prices to the server (30 min vote)',
-        options: [
-            { name: 'item', description: 'The item to change', type: 3, required: true, autocomplete: true },
-            { name: 'sell_price', description: 'Price YOU SELL to players (e.g. 4.5M)', type: 3, required: true },
-            { name: 'buy_price', description: 'Price YOU BUY from players (e.g. 200k)', type: 3, required: true }
-        ]
-    };
-    const priceChangeCommand = {
-        name: 'pricechange', description: 'Forcefully change the price of an EXISTING item (Admin only)',
-        options: [
-            { name: 'item', description: 'The item name to update', type: 3, required: true, autocomplete: true },
-            { name: 'sell_price', description: 'Price YOU SELL to players (e.g. 4.5M)', type: 3, required: true },
-            { name: 'buy_price', description: 'Price YOU BUY from players (e.g. 200k)', type: 3, required: true }
-        ]
-    };
-    const addItemCommand = {
-        name: 'additem', description: 'Insert a brand new item into the database (Admin only)',
-        options: [
-            { name: 'item', description: 'The NEW item name', type: 3, required: true },
-            { name: 'sell_price', description: 'Price YOU SELL to players (e.g. 4.5M)', type: 3, required: true },
-            { name: 'buy_price', description: 'Price YOU BUY from players (e.g. 200k)', type: 3, required: true }
-        ]
-    };
-    const renameItemCommand = {
-        name: 'renameitem', description: 'Change the name of an existing item in the database (Admin only)',
-        options: [
-            { name: 'old_name', description: 'The current item name', type: 3, required: true, autocomplete: true },
-            { name: 'new_name', description: 'The new item name', type: 3, required: true }
-        ]
-    };
-    const removeItemCommand = {
-        name: 'removeitem', description: 'Remove an item completely from the database (Admin only)',
-        options: [
-            { name: 'item', description: 'The item to remove', type: 3, required: true, autocomplete: true }
-        ]
-    };
-
-    await client.application.commands.set([priceCommand, voteCommand, priceChangeCommand, addItemCommand, renameItemCommand, removeItemCommand]);
-    console.log('✅ All 6 Slash commands successfully registered!');
+    await client.application.commands.set(commands);
+    console.log('✅ All Slash commands registered!');
 });
 
 client.on('interactionCreate', async interaction => {
     if (interaction.isAutocomplete()) {
         const focusedValue = interaction.options.getFocused().toLowerCase();
         const choices = await Item.find({ name: new RegExp(focusedValue, 'i') }).limit(25);
-        
-        const respondChoices = choices.map(choice => ({ name: toTitleCase(choice.name), value: choice.name }));
-        await interaction.respond(respondChoices);
+        await interaction.respond(choices.map(choice => ({ name: toTitleCase(choice.name), value: choice.name })));
         return;
     }
 
@@ -149,244 +168,198 @@ client.on('interactionCreate', async interaction => {
     const hasRole = interaction.member && interaction.member.roles && interaction.member.roles.cache.has(ADMIN_ROLE_ID);
     const isAdmin = hasRole || interaction.user.id === ADMIN_USER_ID;
 
-    // ✨ GLOBAL UI ASSETS ✨
     const crownIcon = client.user.displayAvatarURL(); 
     const errorIcon = 'https://cdn-icons-png.flaticon.com/512/4201/4201973.png';
     const royalGold = '#FFB700';
     const MARKET_CHANNEL_ID = '1536121142908293180'; 
 
-    // 📢 HELPER FUNCTION: Smart broadcaster with built-in Error Alarm
     async function sendMarketAlert(itemName, newSell, newBuy, isVote = false, commandInteraction) {
         try {
             const channel = await client.channels.fetch(MARKET_CHANNEL_ID);
-            if (!channel) {
-                await commandInteraction.followUp({ content: `⚠️ **Error:** I cannot see the market channel (<#${MARKET_CHANNEL_ID}>)! Check my permissions.`, ephemeral: true });
-                return; 
-            }
-
-            const alertEmbed = new EmbedBuilder()
-                .setColor(isVote ? '#2ECC71' : royalGold)
-                .setAuthor({ name: isVote ? 'Community Market Update' : 'Official Market Update', iconURL: crownIcon })
-                .setTitle(`📈 ${toTitleCase(itemName)}`)
-                .addFields(
-                    { name: 'New Selling Price', value: `\`\`\`${formatPrice(newSell)}\`\`\``, inline: true },
-                    { name: 'New Buying Price', value: `\`\`\`${formatPrice(newBuy)}\`\`\``, inline: true }
-                )
-                .setTimestamp();
-                
+            if (!channel) return await commandInteraction.followUp({ content: `⚠️ **Error:** Cannot see market channel!`, ephemeral: true });
+            const alertEmbed = new EmbedBuilder().setColor(isVote ? '#2ECC71' : royalGold).setAuthor({ name: isVote ? 'Community Market Update' : 'Official Market Update', iconURL: crownIcon }).setTitle(`📈 ${toTitleCase(itemName)}`).addFields({ name: 'New Selling Price', value: `\`\`\`${formatPrice(newSell)}\`\`\``, inline: true }, { name: 'New Buying Price', value: `\`\`\`${formatPrice(newBuy)}\`\`\``, inline: true }).setTimestamp();
             await channel.send({ embeds: [alertEmbed] });
-        } catch (error) {
-            console.error(error);
-            await commandInteraction.followUp({ content: `⚠️ **Warning:** I tried to send the alert to <#${MARKET_CHANNEL_ID}>, but Discord blocked me! Make sure I have **View Channel**, **Send Messages**, and **Embed Links** permissions enabled in that exact channel.`, ephemeral: true });
-        }
+        } catch (error) { await commandInteraction.followUp({ content: `⚠️ **Warning:** Could not send to market channel. Check permissions.`, ephemeral: true }); }
     }
 
-    // --- /PRICE COMMAND ---
+    // ✨ VOUCH SYSTEM LOGIC ✨
+
+    if (interaction.commandName === 'givevouch') {
+        const targetUser = interaction.options.getUser('user');
+        const type = interaction.options.getString('type');
+        const item = interaction.options.getString('item');
+        const quantity = interaction.options.getString('quantity');
+        
+        // Anti-Abuse 1: Check if banned
+        const isBanned = await VouchBan.findOne({ userId: interaction.user.id });
+        if (isBanned) return interaction.reply({ content: '🚫 You are permanently banned from using the reputation system.', ephemeral: true });
+
+        // Anti-Abuse 2: No self-vouching
+        if (targetUser.id === interaction.user.id) return interaction.reply({ content: '❌ You cannot vouch for yourself.', ephemeral: true });
+        if (targetUser.bot) return interaction.reply({ content: '❌ You cannot vouch a bot.', ephemeral: true });
+
+        // Anti-Abuse 3: Account age (Must be in server for 3 days)
+        const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+        if (member && (Date.now() - member.joinedTimestamp < 1000 * 60 * 60 * 24 * 3)) {
+            return interaction.reply({ content: '⏳ Your account must be in the server for at least 3 days to submit reports.', ephemeral: true });
+        }
+
+        // Anti-Abuse 4: Cooldown (1 hour per user)
+        const cooldownKey = interaction.user.id;
+        if (vouchCooldowns.has(cooldownKey)) {
+            const expiration = vouchCooldowns.get(cooldownKey) + (1000 * 60 * 15); // 1 hour
+            if (Date.now() < expiration) {
+                const timeLeft = Math.round((expiration - Date.now()) / 60000);
+                return interaction.reply({ content: `⏳ Please wait **${timeLeft} minutes** before submitting another vouch.`, ephemeral: true });
+            }
+        }
+
+        await Vouch.create({
+            receiverId: targetUser.id,
+            giverId: interaction.user.id,
+            giverName: interaction.user.username,
+            type: type,
+            item: item,
+            quantity: quantity
+        });
+
+        vouchCooldowns.set(cooldownKey, Date.now()); // Start cooldown
+
+        const replyEmbed = new EmbedBuilder()
+            .setColor(type === 'vouch' ? '#2ECC71' : '#E74C3C')
+            .setAuthor({ name: 'Trade Report Submitted', iconURL: crownIcon })
+            .setDescription(`Successfully recorded a **${type.toUpperCase()}** for <@${targetUser.id}>.\n\n**Item:** ${item}\n**Quantity:** ${quantity}`)
+            .setTimestamp();
+
+        return interaction.reply({ embeds: [replyEmbed] });
+    }
+
+    if (interaction.commandName === 'vouch') {
+        const targetUser = interaction.options.getUser('user');
+        
+        const received = await Vouch.find({ receiverId: targetUser.id });
+        const given = await Vouch.countDocuments({ giverId: targetUser.id });
+
+        const totalVouches = received.filter(v => v.type === 'vouch').length;
+        const totalScams = received.filter(v => v.type === 'scam').length;
+
+        // Generate the web server URL
+        const portalLink = `https://crownempirebot.onrender.com/vouches/${targetUser.id}`;
+
+        const statsEmbed = new EmbedBuilder()
+            .setColor(royalGold)
+            .setAuthor({ name: `${targetUser.username}'s Reputation`, iconURL: targetUser.displayAvatarURL() || crownIcon })
+            .addFields(
+                { name: '✅ Legit Vouches', value: `\`\`\`${totalVouches}\`\`\``, inline: true },
+                { name: '🚨 Scam Reports', value: `\`\`\`${totalScams}\`\`\``, inline: true },
+                { name: '📤 Vouches Given', value: `\`\`\`${given}\`\`\``, inline: true }
+            )
+            .setDescription(`**[📋 Click here to view their complete Trade Ledger](${portalLink})**\n*Opens a detailed table of every trade, item, and quantity.*`)
+            .setTimestamp();
+
+        return interaction.reply({ embeds: [statsEmbed] });
+    }
+
+    if (interaction.commandName === 'vouchban') {
+        if (!isAdmin) return interaction.reply({ content: '❌ You do not have permission.', ephemeral: true });
+        const targetUser = interaction.options.getUser('user');
+
+        await VouchBan.findOneAndUpdate({ userId: targetUser.id }, { userId: targetUser.id }, { upsert: true });
+        
+        // The nuke: Erase every vouch this user ever gave
+        const deleteResult = await Vouch.deleteMany({ giverId: targetUser.id });
+
+        const banEmbed = new EmbedBuilder()
+            .setColor('#992D22') // Dark red
+            .setTitle('🔨 Reputation System Ban')
+            .setDescription(`<@${targetUser.id}> has been permanently blacklisted from the vouch system.`)
+            .addFields({ name: 'Purge Complete', value: `Deleted **${deleteResult.deletedCount}** fake/abusive vouches they had previously given.` });
+
+        return interaction.reply({ embeds: [banEmbed] });
+    }
+
+    // --- EXISTING MARKET COMMANDS (Condensed to save space) ---
     if (interaction.commandName === 'price') {
         const itemName = interaction.options.getString('item').toLowerCase().trim();
         const itemData = await Item.findOne({ name: itemName });
-
         if (itemData) {
-            const sellAfterTaxes = Math.floor(itemData.ownerSellPrice * 0.93);
-            const buyAfterTaxes = Math.floor(itemData.ownerBuyPrice * 1.07);
-
-            const priceEmbed = new EmbedBuilder()
-                .setColor(royalGold) 
-                .setAuthor({ name: 'Crown Empire Official Market', iconURL: crownIcon })
-                .setTitle(`📦 ${toTitleCase(itemData.name)}`)
-                .addFields(
-                    { name: '📤 Shop Sells For', value: `\`\`\`💰 ${formatPrice(itemData.ownerSellPrice)}\`\`\`> *After Tax:* **${formatPrice(sellAfterTaxes)}**`, inline: true },
-                    { name: '📥 Shop Buys For', value: `\`\`\`💰 ${formatPrice(itemData.ownerBuyPrice)}\`\`\`> *After Tax:* **${formatPrice(buyAfterTaxes)}**`, inline: true }
-                )
-                .setThumbnail(crownIcon)
-                .setTimestamp()
-                .setFooter({ text: `Requested by ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() });
-
+            const sellAfterTaxes = Math.floor(itemData.ownerSellPrice * 0.93), buyAfterTaxes = Math.floor(itemData.ownerBuyPrice * 1.07);
+            const priceEmbed = new EmbedBuilder().setColor(royalGold).setAuthor({ name: 'Crown Empire Official Market', iconURL: crownIcon }).setTitle(`📦 ${toTitleCase(itemData.name)}`).addFields({ name: '📤 Shop Sells For', value: `\`\`\`💰 ${formatPrice(itemData.ownerSellPrice)}\`\`\`> *After Tax:* **${formatPrice(sellAfterTaxes)}**`, inline: true }, { name: '📥 Shop Buys For', value: `\`\`\`💰 ${formatPrice(itemData.ownerBuyPrice)}\`\`\`> *After Tax:* **${formatPrice(buyAfterTaxes)}**`, inline: true }).setThumbnail(crownIcon).setTimestamp();
             await interaction.reply({ embeds: [priceEmbed] });
         } else {
             const partialMatches = await Item.find({ name: new RegExp(itemName, 'i') }).limit(10);
-            
             if (partialMatches.length > 0) {
                 const suggestionList = partialMatches.map(i => `> 🔸 **${toTitleCase(i.name)}**`).join('\n');
-                const searchEmbed = new EmbedBuilder()
-                    .setColor('#2B2D31')
-                    .setAuthor({ name: 'Item Not Found', iconURL: errorIcon })
-                    .setDescription(`We couldn't find an exact match for **"${toTitleCase(itemName)}"**.\n\n**Did you mean one of these?**\n${suggestionList}`)
-                    .setFooter({ text: '💡 Tip: Click a name from the pop-up menu next time!' });
-                
-                await interaction.reply({ embeds: [searchEmbed], ephemeral: true });
-            } else {
-                const notFoundEmbed = new EmbedBuilder().setColor('#FF4D4D').setDescription(`❌ The Crown Empire has not set official prices for **"${toTitleCase(itemName)}"** yet.`);
-                await interaction.reply({ embeds: [notFoundEmbed], ephemeral: true });
-            }
+                await interaction.reply({ embeds: [new EmbedBuilder().setColor('#2B2D31').setAuthor({ name: 'Item Not Found', iconURL: errorIcon }).setDescription(`Did you mean one of these?\n${suggestionList}`)], ephemeral: true });
+            } else await interaction.reply({ embeds: [new EmbedBuilder().setColor('#FF4D4D').setDescription(`❌ No prices set for **"${toTitleCase(itemName)}"** yet.`)], ephemeral: true });
         }
     }
-
-    // --- /PRICECHANGE COMMAND ---
     if (interaction.commandName === 'pricechange') {
         if (!isAdmin) return interaction.reply({ content: '❌ You do not have permission.', ephemeral: true });
         const itemName = interaction.options.getString('item').toLowerCase().trim();
-        const newSell = parsePrice(interaction.options.getString('sell_price'));
-        const newBuy = parsePrice(interaction.options.getString('buy_price'));
-
-        if (newSell === null || newBuy === null) return interaction.reply({ content: '❌ Invalid price format!', ephemeral: true });
-        
-        // 👇 THIS IS THE LINE THAT WAS FIXED 👇
+        const newSell = parsePrice(interaction.options.getString('sell_price')), newBuy = parsePrice(interaction.options.getString('buy_price'));
+        if (newSell === null || newBuy === null) return interaction.reply({ content: '❌ Invalid price!', ephemeral: true });
         const itemData = await Item.findOneAndUpdate({ name: itemName }, { ownerSellPrice: newSell, ownerBuyPrice: newBuy }, { returnDocument: 'after' });
-        
         if (!itemData) return interaction.reply({ content: `❌ Item not found. Use \`/additem\`.`, ephemeral: true });
-
-        const adminEmbed = new EmbedBuilder()
-            .setColor(royalGold)
-            .setAuthor({ name: 'Admin Price Override', iconURL: crownIcon })
-            .setTitle(`🔄 ${toTitleCase(itemData.name)}`)
-            .addFields(
-                { name: 'New Selling Price', value: `\`\`\`${formatPrice(newSell)}\`\`\``, inline: true },
-                { name: 'New Buying Price', value: `\`\`\`${formatPrice(newBuy)}\`\`\``, inline: true }
-            )
-            .setTimestamp();
-            
+        const adminEmbed = new EmbedBuilder().setColor(royalGold).setAuthor({ name: 'Admin Price Override', iconURL: crownIcon }).setTitle(`🔄 ${toTitleCase(itemData.name)}`).addFields({ name: 'New Selling Price', value: `\`\`\`${formatPrice(newSell)}\`\`\``, inline: true }, { name: 'New Buying Price', value: `\`\`\`${formatPrice(newBuy)}\`\`\``, inline: true }).setTimestamp();
         await interaction.reply({ embeds: [adminEmbed] });
         await sendMarketAlert(itemData.name, newSell, newBuy, false, interaction);
     }
-
-    // --- /ADDITEM COMMAND ---
     if (interaction.commandName === 'additem') {
         if (!isAdmin) return interaction.reply({ content: '❌ You do not have permission.', ephemeral: true });
         const itemName = interaction.options.getString('item').toLowerCase().trim();
-        const newSell = parsePrice(interaction.options.getString('sell_price'));
-        const newBuy = parsePrice(interaction.options.getString('buy_price'));
-
-        if (newSell === null || newBuy === null) return interaction.reply({ content: '❌ Invalid price format!', ephemeral: true });
-        if (await Item.findOne({ name: itemName })) return interaction.reply({ content: `❌ Item already exists!`, ephemeral: true });
-
+        const newSell = parsePrice(interaction.options.getString('sell_price')), newBuy = parsePrice(interaction.options.getString('buy_price'));
+        if (newSell === null || newBuy === null) return interaction.reply({ content: '❌ Invalid format!', ephemeral: true });
+        if (await Item.findOne({ name: itemName })) return interaction.reply({ content: `❌ Item exists!`, ephemeral: true });
         await Item.create({ name: itemName, ownerSellPrice: newSell, ownerBuyPrice: newBuy });
-        
-        const addEmbed = new EmbedBuilder()
-            .setColor('#2ECC71')
-            .setAuthor({ name: 'Item Added to Cloud', iconURL: crownIcon })
-            .setTitle(`✅ ${toTitleCase(itemName)}`)
-            .addFields(
-                { name: 'Selling Price', value: `\`\`\`${formatPrice(newSell)}\`\`\``, inline: true },
-                { name: 'Buying Price', value: `\`\`\`${formatPrice(newBuy)}\`\`\``, inline: true }
-            )
-            .setTimestamp();
-            
+        const addEmbed = new EmbedBuilder().setColor('#2ECC71').setAuthor({ name: 'Item Added', iconURL: crownIcon }).setTitle(`✅ ${toTitleCase(itemName)}`).addFields({ name: 'Selling', value: `\`\`\`${formatPrice(newSell)}\`\`\``, inline: true }, { name: 'Buying', value: `\`\`\`${formatPrice(newBuy)}\`\`\``, inline: true });
         await interaction.reply({ embeds: [addEmbed] });
         await sendMarketAlert(itemName, newSell, newBuy, false, interaction);
     }
-
-    // --- /RENAMEITEM COMMAND ---
     if (interaction.commandName === 'renameitem') {
         if (!isAdmin) return interaction.reply({ content: '❌ You do not have permission.', ephemeral: true });
-        const oldName = interaction.options.getString('old_name').toLowerCase().trim();
-        const newName = interaction.options.getString('new_name').toLowerCase().trim();
-
+        const oldName = interaction.options.getString('old_name').toLowerCase().trim(), newName = interaction.options.getString('new_name').toLowerCase().trim();
         const oldItem = await Item.findOne({ name: oldName });
         if (!oldItem) return interaction.reply({ content: `❌ Item not found.`, ephemeral: true });
-        if (await Item.findOne({ name: newName })) return interaction.reply({ content: `❌ New name already exists!`, ephemeral: true });
-
-        oldItem.name = newName;
-        await oldItem.save();
-        
-        const renameEmbed = new EmbedBuilder()
-            .setColor('#3498DB')
-            .setAuthor({ name: 'Item Renamed', iconURL: crownIcon })
-            .setDescription(`Successfully changed **${toTitleCase(oldName)}** ➔ **${toTitleCase(newName)}**`);
-            
-        return interaction.reply({ embeds: [renameEmbed] });
+        if (await Item.findOne({ name: newName })) return interaction.reply({ content: `❌ New name exists!`, ephemeral: true });
+        oldItem.name = newName; await oldItem.save();
+        await interaction.reply({ embeds: [new EmbedBuilder().setColor('#3498DB').setDescription(`Changed **${toTitleCase(oldName)}** ➔ **${toTitleCase(newName)}**`)] });
     }
-
-    // --- /REMOVEITEM COMMAND ---
     if (interaction.commandName === 'removeitem') {
         if (!isAdmin) return interaction.reply({ content: '❌ You do not have permission.', ephemeral: true });
         const itemName = interaction.options.getString('item').toLowerCase().trim();
         if (!await Item.findOneAndDelete({ name: itemName })) return interaction.reply({ content: `❌ Item not found.`, ephemeral: true });
-
-        const removeEmbed = new EmbedBuilder()
-            .setColor('#E74C3C')
-            .setAuthor({ name: 'Item Deleted', iconURL: crownIcon })
-            .setDescription(`Successfully purged **${toTitleCase(itemName)}** from the cloud database.`);
-            
-        return interaction.reply({ embeds: [removeEmbed] });
+        await interaction.reply({ embeds: [new EmbedBuilder().setColor('#E74C3C').setDescription(`Purged **${toTitleCase(itemName)}**.`)] });
     }
-
-    // --- /VOTEPRICE COMMAND ---
     if (interaction.commandName === 'voteprice') {
         const itemName = interaction.options.getString('item').toLowerCase().trim();
-        const newSell = parsePrice(interaction.options.getString('sell_price'));
-        const newBuy = parsePrice(interaction.options.getString('buy_price'));
-
+        const newSell = parsePrice(interaction.options.getString('sell_price')), newBuy = parsePrice(interaction.options.getString('buy_price'));
         if (newSell === null || newBuy === null) return interaction.reply({ content: '❌ Invalid price format!', ephemeral: true });
-
-        const totalMembers = interaction.guild.memberCount || 2; 
-        const requiredVotes = Math.ceil(totalMembers / 2);
-
-        const voteEmbed = new EmbedBuilder()
-            .setColor('#5865F2') 
-            .setAuthor({ name: 'Community Governance', iconURL: crownIcon })
-            .setTitle(`📢 Price Proposal: ${toTitleCase(itemName)}`)
-            .addFields(
-                { name: 'Proposed Selling', value: `\`\`\`${formatPrice(newSell)}\`\`\``, inline: true },
-                { name: 'Proposed Buying', value: `\`\`\`${formatPrice(newBuy)}\`\`\``, inline: true }
-            )
-            .setDescription(`📊 **Votes:** \`0 / ${requiredVotes}\` (Requires 50% of server)\n⏳ *Voting ends in 30 minutes.*`)
-            .setTimestamp();
-
-        const voteButton = new ButtonBuilder().setCustomId('vote_yes').setLabel('Vote YES').setStyle(ButtonStyle.Success);
-        const row = new ActionRowBuilder().addComponents(voteButton);
-
+        const requiredVotes = Math.ceil((interaction.guild.memberCount || 2) / 2);
+        const voteEmbed = new EmbedBuilder().setColor('#5865F2').setAuthor({ name: 'Community Governance', iconURL: crownIcon }).setTitle(`📢 Price Proposal: ${toTitleCase(itemName)}`).addFields({ name: 'Proposed Selling', value: `\`\`\`${formatPrice(newSell)}\`\`\``, inline: true }, { name: 'Proposed Buying', value: `\`\`\`${formatPrice(newBuy)}\`\`\``, inline: true }).setDescription(`📊 **Votes:** \`0 / ${requiredVotes}\`\n⏳ *Voting ends in 30 minutes.*`).setTimestamp();
+        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('vote_yes').setLabel('Vote YES').setStyle(ButtonStyle.Success));
         const responseMessage = await interaction.reply({ embeds: [voteEmbed], components: [row], fetchReply: true });
-
         const votedUsers = new Set();
         const collector = responseMessage.createMessageComponentCollector({ time: 30 * 60 * 1000 });
-
         collector.on('collect', async buttonInteraction => {
             if (buttonInteraction.customId === 'vote_yes') {
-                if (votedUsers.has(buttonInteraction.user.id)) return buttonInteraction.reply({ content: 'You have already voted!', ephemeral: true });
-
+                if (votedUsers.has(buttonInteraction.user.id)) return buttonInteraction.reply({ content: 'Already voted!', ephemeral: true });
                 votedUsers.add(buttonInteraction.user.id);
-                await buttonInteraction.reply({ content: 'Your vote has been counted!', ephemeral: true });
-
-                const updatedVoteEmbed = EmbedBuilder.from(voteEmbed).setDescription(`📊 **Votes:** \`${votedUsers.size} / ${requiredVotes}\` (Requires 50% of server)\n⏳ *Voting ends in 30 minutes.*`);
-                await interaction.editReply({ embeds: [updatedVoteEmbed] });
-
+                await buttonInteraction.reply({ content: 'Vote counted!', ephemeral: true });
+                await interaction.editReply({ embeds: [EmbedBuilder.from(voteEmbed).setDescription(`📊 **Votes:** \`${votedUsers.size} / ${requiredVotes}\`\n⏳ *Voting ends in 30 minutes.*`)] });
                 if (votedUsers.size >= requiredVotes) {
                     const existingItem = await Item.findOne({ name: itemName });
-                    if (existingItem) {
-                        existingItem.ownerSellPrice = newSell;
-                        existingItem.ownerBuyPrice = newBuy;
-                        await existingItem.save();
-                    } else {
-                        await Item.create({ name: itemName, ownerSellPrice: newSell, ownerBuyPrice: newBuy });
-                    }
-
-                    const passedEmbed = new EmbedBuilder()
-                        .setColor('#2ECC71')
-                        .setAuthor({ name: 'Vote Passed', iconURL: crownIcon })
-                        .setTitle(`🎉 Official Prices Updated: ${toTitleCase(itemName)}`)
-                        .addFields(
-                            { name: 'New Selling', value: `\`\`\`${formatPrice(newSell)}\`\`\``, inline: true },
-                            { name: 'New Buying', value: `\`\`\`${formatPrice(newBuy)}\`\`\``, inline: true }
-                        )
-                        .setTimestamp();
-                    
-                    await interaction.followUp({ embeds: [passedEmbed] });
+                    if (existingItem) { existingItem.ownerSellPrice = newSell; existingItem.ownerBuyPrice = newBuy; await existingItem.save(); }
+                    else { await Item.create({ name: itemName, ownerSellPrice: newSell, ownerBuyPrice: newBuy }); }
+                    await interaction.followUp({ embeds: [new EmbedBuilder().setColor('#2ECC71').setTitle(`🎉 Prices Updated: ${toTitleCase(itemName)}`).addFields({ name: 'New Selling', value: `\`\`\`${formatPrice(newSell)}\`\`\``, inline: true }, { name: 'New Buying', value: `\`\`\`${formatPrice(newBuy)}\`\`\``, inline: true })] });
                     await sendMarketAlert(itemName, newSell, newBuy, true, interaction);
                     collector.stop('passed');
                 }
             }
         });
-
         collector.on('end', async (collected, reason) => {
             await interaction.editReply({ components: [] });
-            if (reason !== 'passed') {
-                const failedEmbed = new EmbedBuilder()
-                    .setColor('#E74C3C')
-                    .setAuthor({ name: 'Vote Failed', iconURL: crownIcon })
-                    .setDescription(`The proposal for **${toTitleCase(itemName)}** expired without enough votes.`);
-                await interaction.followUp({ embeds: [failedEmbed] });
-            }
+            if (reason !== 'passed') await interaction.followUp({ embeds: [new EmbedBuilder().setColor('#E74C3C').setDescription(`Proposal for **${toTitleCase(itemName)}** expired without enough votes.`)] });
         });
     }
 });
@@ -394,14 +367,4 @@ client.on('interactionCreate', async interaction => {
 process.on('unhandledRejection', (reason, promise) => console.error('Unhandled Rejection:', reason));
 process.on('uncaughtException', (err) => console.error('Uncaught Exception:', err));
 
-console.log("🔍 System Check: Looking for Discord Token...");
-if (!process.env.TOKEN) {
-    console.log("❌ ERROR: The TOKEN is missing!");
-} else {
-    console.log("✅ Token found! Attempting to connect to Discord...");
-    client.login(process.env.TOKEN).then(() => {
-        console.log("✅ Connection request accepted by Discord!");
-    }).catch(err => {
-        console.error("❌ DISCORD REJECTED THE LOGIN:", err);
-    });
-}
+client.login(process.env.TOKEN);
