@@ -206,11 +206,7 @@ client.on('interactionCreate', async interaction => {
         if (targetUser.id === interaction.user.id) return interaction.reply({ content: '❌ You cannot vouch for yourself.', ephemeral: true });
         if (targetUser.bot) return interaction.reply({ content: '❌ You cannot vouch a bot.', ephemeral: true });
 
-        // Anti-Abuse 3: Account age (Must be in server for 3 days)
-        const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-        if (member && (Date.now() - member.joinedTimestamp < 1000 * 60 * 60 * 24 * 3)) {
-            return interaction.reply({ content: '⏳ Your account must be in the server for at least 3 days to submit reports.', ephemeral: true });
-        }
+        
 
         // Anti-Abuse 4: Cooldown (15 minutes per user)
         const cooldownKey = interaction.user.id;
